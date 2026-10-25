@@ -2,27 +2,40 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/yydeclx/codex-quota-badge?display_name=tag&sort=semver)](https://github.com/yydeclx/codex-quota-badge/releases/latest) [![Release Downloads](https://img.shields.io/github/downloads/yydeclx/codex-quota-badge/total)](https://github.com/yydeclx/codex-quota-badge/releases)
 
-一个轻量的 Codex / OpenCodex 额度侧栏伴随工具。它把本机 provider 用量、周额度、运行状态和额度重置监测显示在 Codex 最左侧的原生侧栏区域。
+> 在 Codex 侧栏一眼看到本机用量、周额度、运行状态和重置信号。
 
-支持 Windows、Intel Mac 和 Apple Silicon Mac。程序以本机只读数据为主，不修改 Codex 安装、不读取模型密钥、不发起模型请求。
+Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同时管理 Codex / OpenCodex 多个 provider、多个设备和原生子代理的开发者。它支持 Windows、Intel Mac 和 Apple Silicon Mac，默认只读取本机数据，不修改 Codex 安装、不读取模型密钥，也不发起模型请求。
 
-> 当前最新版本：[v1.3.9](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.3.9)
+[下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
+
+> 当前最新版本：**[v1.3.9](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.3.9)**
+
+## 你可以看到什么
+
+| 模块 | 内容 |
+| --- | --- |
+| Provider 用量 | ChatGPT、OpenCodex、ABC 和其他已配置 provider 的本机 Token 用量 |
+| 周额度 | 剩余百分比、重置时间，以及 Pro / Plus 兼容数据 |
+| 运行状态 | 主会话和原生子代理按实际模型路由显示绿色运行指示 |
+| 重置监测 | 明确信号优先；没有信号时显示 24 小时和 48 小时预测 |
+| 本机归因 | 结合额度采样和本机活动估算本机与其他设备的消耗 |
+| 管理与更新 | 模块排序、布局微调、样式预览和 GitHub Release 自动更新 |
 
 ## 预览
 
-### 原生侧栏
+### 侧栏状态
 
 ![侧栏额度与运行状态](docs/images/current-sidebar.png)
 
-Token 模块显示各 provider 的本机 Token 用量；主会话或原生子代理运行时显示绿色运行指示，完成未读状态单独显示。
+侧栏模块保持紧凑，运行指示、完成未读和额度状态彼此独立；多个 provider 或子代理并行时可以同时观察。
 
 ### 管理窗口
 
 ![侧栏管理窗口](docs/images/manager-modern-0.png)
 
-管理窗口支持模块开关、排序、间距、底部留白、水平偏移、Token 样式和周额度样式预览。
+管理窗口支持模块开关、排序、模块间距、底部留白、水平偏移、Token 样式和周额度样式预览。
 
-### 周额度与状态
+### 周额度与重置监测
 
 ![周额度样式](docs/images/quota-style-01-current.png)
 
@@ -30,19 +43,7 @@ Token 模块显示各 provider 的本机 Token 用量；主会话或原生子代
 
 ![额度重置监测](docs/images/reset-forecast-centered-check.png)
 
-重置监测优先显示明确的公开信号；没有明确信号时显示 24 小时和 48 小时预测，并显示数据新鲜度。账号额度变化会用于确认是否真的完成重置。
-
-## 功能
-
-- **Provider 用量**：显示 ChatGPT、OpenCodex、SKG 以及其他已配置 provider 的本机 Token 用量
-- **周额度**：显示剩余周额度、重置时间和 Pro / Plus 兼容数据
-- **运行指示**：按实际模型路由归属 provider，支持主会话和原生子代理并行运行
-- **未读状态**：保留主会话完成未读语义，不把子代理重复加入主任务列表
-- **额度重置监测**：明确 Tibo 信号优先，无明确信号时显示 24h / 48h 概率
-- **本机归因**：按额度采样、活动区间和本机 OpenAI 用量估算本机与其他设备的消耗
-- **跨设备更新**：从 GitHub Releases 检查并静默更新，失败时保留旧版本
-- **显示适配**：支持 DPI 缩放、水平偏移、MiSans → Microsoft YaHei 字体回退
-- **低资源模式**：后台休眠、缓存快照、自适应任务扫描和分批管理页预览
+重置监测显示公开数据的新鲜度；账号额度变化会进一步用于确认是否真的完成重置。截图中的数值是示例数据，不代表账号账单。
 
 ## 快速安装
 
@@ -50,19 +51,19 @@ Token 模块显示各 provider 的本机 Token 用量；主会话或原生子代
 2. 下载对应平台的 ZIP 包并解压到固定目录
 3. Windows 运行 ~install.ps1~ 或 ~start.ps1~
 4. 打开 Codex，侧栏会自动附着到主窗口
-5. 右键侧栏进入“侧栏管理”调整模块和位置
+5. 右键侧栏进入“侧栏管理”，调整模块和位置
 
-Windows 脚本使用 PowerShell 7。首次安装和跨电脑配置请参考 [PORTABLE-INSTALL.md](PORTABLE-INSTALL.md)。
+Windows 脚本使用 PowerShell 7。首次安装、跨电脑配置和更新保留规则请参考 [PORTABLE-INSTALL.md](PORTABLE-INSTALL.md)。
 
 ## 配置示例
 
-~sidebar-config.json~ 控制模块和布局：
+~sidebar-config.json~ 控制模块顺序和布局：
 
 ~~~json
 {
   "refreshSeconds": 60,
   "items": [
-    {"id": "provider_ocx", "type": "opencodex_today", "provider": "OCX", "label": "OCX", "enabled": true, "gapAfter": 3},
+    {"id": "provider_abc", "type": "opencodex_today", "provider": "ABC", "label": "ABC", "enabled": true, "gapAfter": 3},
     {"id": "weekly_quota", "type": "weekly_quota", "label": "周额度", "enabled": true, "gapAfter": 0}
   ],
   "quotaStyle": "01",
@@ -86,14 +87,14 @@ Windows 脚本使用 PowerShell 7。首次安装和跨电脑配置请参考 [POR
 - Token 用量来自本机 OpenCodex usage 数据，不代表账号在其他电脑上的完整账单
 - 周额度来自本机可用的 Codex / OpenCodex 额度接口
 - 多台设备同时使用同一账号时，本机归因只能是采样估算，无法从官方周额度接口精确拆分
-- 额度重置监测使用公开的只读预测和信号数据，并缓存最后一次成功结果
+- 重置监测使用公开的只读预测和信号数据，并缓存最后一次成功结果
 - 插件不保存模型正文、密钥或管理员令牌
 - 状态中心只读取脱敏快照，诊断复制使用字段白名单
 - 插件不会启动、停止或修改 OpenCodex 网关，也不会发送模型请求
 
 ## 自动更新
 
-从 v1.3.8 开始，安装包包含 GitHub Release 更新器。它会定期检查 GitHub 最新 Release，下载完整 ZIP，校验 SHA256，再替换程序文件。更新时保留每台电脑自己的配置、额度历史、连接历史和账号状态；更新失败会保留旧版本。
+从 v1.3.8 开始，安装包包含 GitHub Release 更新器。它会定期检查最新 Release，下载完整 ZIP，校验 SHA256，再替换程序文件。更新时保留每台电脑自己的配置、额度历史、连接历史和账号状态；更新失败会保留旧版本。
 
 本项目同时使用：
 
@@ -143,4 +144,5 @@ python -m py_compile *.py
 ## License
 
 当前仓库尚未提供独立 LICENSE 文件。若要长期对外维护，建议补充明确的开源许可证。
+
 
