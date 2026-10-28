@@ -1,0 +1,676 @@
+--- a/src/lib/local-management-capability.ts
++++ b/src/lib/local-management-capability.ts
+@@ -14,6 +14,7 @@
+   providerKeys: "/api/providers/keys",
+   config: "/api/config",
+   systemMemory: "/api/system/memory",
++  providerActivity: "/api/system/provider-activity",
+   companionSettings: "/api/companion/settings",
+   usage: "/api/usage",
+   startupHealth: "/api/startup-health",
+@@ -46,6 +47,7 @@
+     || path === LOCAL_MANAGEMENT_READ_PATHS.providerKeys
+     || path === LOCAL_MANAGEMENT_READ_PATHS.config
+     || path === LOCAL_MANAGEMENT_READ_PATHS.systemMemory
++    || path === LOCAL_MANAGEMENT_READ_PATHS.providerActivity
+     || path === LOCAL_MANAGEMENT_READ_PATHS.companionSettings
+     || path === LOCAL_MANAGEMENT_READ_PATHS.usage
+     || path === LOCAL_MANAGEMENT_READ_PATHS.startupHealth
+--- a/src/server/index/websocket-handler.ts
++++ b/src/server/index/websocket-handler.ts
+@@ -1,3 +1,4 @@
++import { beginProviderActivity } from "../provider-activity";
+ import { nativeSteeringUnavailableReason, nativeResponseControlMode, type NativeResponseControl } from "../responses/native-response-control";
+ import { NativeInjectionChannel } from "../responses/native-injection";
+ import { NativeSteeringChannel, NativeSteeringError } from "../responses/native-steering";
+@@ -322,6 +323,7 @@
+             ...(wsAdmission ? admissionFields(wsAdmission) : {}),
+             inboundProtocol: "responses",
+           };
++          beginProviderActivity(logCtx, requestId, start, turnAbort.signal, "ws");
+           let logged = false;
+           const finalizeLog = (
+             status: number,
+--- a/src/server/index.ts
++++ b/src/server/index.ts
+@@ -1,3 +1,4 @@
++import { beginProviderActivity, finishProviderActivity } from "./provider-activity";
+ import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
+ import { scheduleDesktopCompatibilityStartup } from "./index/desktop-compatibility-startup";
+ import { AuxiliaryListenerBindError } from "./ports";
+@@ -505,12 +506,13 @@
+     work: (lease: ActiveTurnLease) => Promise<Response>,
+     refusalLog?: WorkflowRefusalLog,
+   ): Promise<Response> {
++    if (refusalLog?.logCtx.inboundProtocol === "responses" && new URL(req.url).pathname === "/v1/responses") beginProviderActivity(refusalLog.logCtx, refusalLog.requestId, refusalLog.start, req.signal);
+     const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers), req.signal);
+-    if (!lease) return serverBusyResponse(req, "active turns", policy);
++    if (!lease) { finishProviderActivity(refusalLog?.logCtx, "failed"); return serverBusyResponse(req, "active turns", policy); }
+     // Root, lane, and the refusal that follows from them, all live in ./workflow-refusal.
+     let workflow: ReturnType<typeof admitHttpWorkflowTurn>;
+     try { workflow = admitHttpWorkflowTurn(req.headers); }
+-    catch (error) { lease.release(); throw error; }
++    catch (error) { lease.release(); finishProviderActivity(refusalLog?.logCtx, "failed"); throw error; }
+     if (workflow && !workflow.admitted) {
+       lease.release();
+       // withCors, because without Access-Control-Allow-Origin the exposed refusal header is
+@@ -522,7 +524,7 @@
+     try {
+       response = await runAdmittedBodyWork(req, policy, config.maxInboundBodyBytes, () => work(lease), refusalLog);
+     } catch (error) {
+-      lease.release();
++      lease.release(); finishProviderActivity(refusalLog?.logCtx, "failed");
+       throw error;
+     }
+     if (!lease.isTransferred()) {
+--- a/src/server/management/system-routes.ts
++++ b/src/server/management/system-routes.ts
+@@ -1,3 +1,4 @@
++import { providerActivitySnapshot } from "../provider-activity";
+ /**
+  * /api/system/* — service-process runtime/memory introspection (#314 WP3)
+  * and the memory-card drain-and-restart action (#563).
+@@ -65,6 +66,7 @@
+ 
+ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Response | null> {
+   const { req, url, config, version } = ctx;
++  if (url.pathname === "/api/system/provider-activity" && req.method === "GET") return jsonResponse(providerActivitySnapshot(), 200, req, config);
+   if (url.pathname === "/api/system/health" && req.method === "GET") {
+     // Authenticated management counterpart to /healthz. Remote Hub deliberately keeps the
+     // unauthenticated liveness route off its management ingress, while the connected dashboard
+--- a/src/server/relay.ts
++++ b/src/server/relay.ts
+@@ -1,3 +1,4 @@
++import { observeProviderActivity } from "./provider-activity";
+ import type { ResponsesTerminalStatus } from "../bridge";
+ import {
+   cyberPolicyErrorType,
+@@ -859,6 +860,7 @@
+     onTerminal: reportTerminal,
+     logCtx,
+     onFirstOutput,
++    onParsedPayload: payload => observeProviderActivity(logCtx, payload),
+   });
+ 
+   return new ReadableStream<Uint8Array>({
+--- a/src/server/request-log.ts
++++ b/src/server/request-log.ts
+@@ -1,3 +1,4 @@
++import { finishProviderActivity } from "./provider-activity";
+ import { existsSync, readFileSync } from "node:fs";
+ import { randomBytes } from "node:crypto";
+ import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
+@@ -1371,6 +1372,7 @@
+   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
+   addLog: (entry: RequestLogEntry) => void = addRequestLog,
+ ): void {
++  finishProviderActivity(logCtx, meta?.terminalStatus ?? (status === 499 ? "aborted" : status >= 400 ? "failed" : "completed"));
+   // Mid-stream web-search aborts used to emit response.failed and land as 502/upstream_server_error.
+   // Prefer the client-close classification whenever the captured reason says so.
+   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
+--- a/src/server/responses/native-steering-log.ts
++++ b/src/server/responses/native-steering-log.ts
+@@ -1,3 +1,4 @@
++import { observeProviderActivity } from "../provider-activity";
+ import { inspectResponseLogSsePayload, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
+ import type { OcxUsage } from "../../types";
+ import { MAX_NATIVE_STEERING_RESPONSES } from "./native-steering";
+@@ -10,6 +11,7 @@
+     let event: { type?: string; delta?: unknown; response?: { id?: string; usage?: unknown; incomplete_details?: { reason?: string } } };
+     try { event = JSON.parse(payload); } catch { return; }
+     if (event.type?.startsWith("response.steer.") || event.type?.startsWith("response.inject.")) return;
++    observeProviderActivity(logCtx, event, "ws");
+     if (!outputSeen && event.type?.endsWith(".delta") && typeof event.delta === "string" && event.delta.length) {
+       outputSeen = true; onFirstOutput?.();
+     }
+--- a/src/server/responses/passthrough-delivery.ts
++++ b/src/server/responses/passthrough-delivery.ts
+@@ -1,3 +1,4 @@
++import { observeProviderActivity } from "../provider-activity";
+ import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
+ import { isNativeControlResponse } from "./native-response-control";
+ import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
+@@ -1056,7 +1057,7 @@
+         const effectInspector = createSseInspector({
+           onTerminal: reportNativeTerminal,
+           logCtx,
+-          onParsedPayload: noteInspectedPayload,
++          onParsedPayload: (payload: unknown) => { observeProviderActivity(logCtx, payload); noteInspectedPayload(payload); },
+           onFirstOutput: options.onFirstOutput,
+           pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
+         });
+@@ -1137,7 +1138,7 @@
+           onTerminal: reportNativeTerminal,
+           logCtx,
+           onCompletedResponse: rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
+-          onParsedPayload: noteInspectedPayload,
++          onParsedPayload: (payload: unknown) => { observeProviderActivity(logCtx, payload); noteInspectedPayload(payload); },
+           onFirstOutput: options.onFirstOutput,
+           pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
+         });
+@@ -1205,7 +1206,7 @@
+         drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
+         upstream,
+         pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
+-        onParsedPayload: noteInspectedPayload,
++        onParsedPayload: (payload: unknown) => { observeProviderActivity(logCtx, payload); noteInspectedPayload(payload); },
+       };
+       if (recordTerminalOutcomes) {
+         // A real terminal was parsed from the (teed) inspection stream — record it as the outcome
+--- /dev/null
++++ b/src/server/provider-activity.ts
+@@ -0,0 +1,111 @@
++/** Optional local companion telemetry: bounded numeric state, no payload retention or timers. */
++import { estimateTokensFromCharacterCounts } from "../lib/token-estimate";
++import type { RequestLogContext } from "./request-log";
++
++const MAX_ACTIVE = 128;
++const MAX_FINISHED = 32;
++const FINISHED_TTL_MS = 10_000;
++const MAX_AGE_MS = 30 * 60_000;
++type Context = Pick<RequestLogContext, "provider" | "model" | "conversationId" | "usage" | "attempts" | "activeAttempt">;
++type Row = {
++  requestId: string; startedAt: number; mono: number; transport: "http" | "ws";
++  context: WeakRef<Context>; latin: number; cjk: number;
++  firstOutputMs?: number; genStartMs?: number; lastOutputMs?: number;
++  cleanup: () => void;
++};
++type Finished = { at: number; value: Record<string, unknown> };
++const active = new Map<string, Row>();
++const byContext = new WeakMap<Context, Row>();
++const finished: Finished[] = [];
++const enabled = process.env.OPENCODEX_COMPANION_TELEMETRY !== "0";
++const CONTENT_EVENTS = new Set(["response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta"]);
++const elapsed = (row: Row) => Math.max(0, performance.now() - row.mono);
++const label = (value: unknown) => typeof value === "string" && /^[\w./:+ -]{1,100}$/.test(value) ? value : undefined;
++
++function project(row: Row, terminalStatus?: string): Record<string, unknown> {
++  const context = row.context.deref();
++  const provider = label(context?.provider) ?? "unknown";
++  const model = label(context?.model);
++  const sends = (context?.attempts ?? []).reduce((n, a) => n + Math.max(0, a.sendCount || 0), 0);
++  const measured = terminalStatus && context?.usage?.estimated !== true ? context?.usage?.outputTokens : undefined;
++  const reported = typeof measured === "number" && Number.isFinite(measured) && measured >= 0;
++  return {
++    requestId: row.requestId, provider, model, conversationId: label(context?.conversationId),
++    startedAt: row.startedAt, durationMs: elapsed(row), firstOutputMs: row.firstOutputMs,
++    genStartMs: row.genStartMs, lastOutputMs: row.lastOutputMs,
++    lastOutputAt: row.lastOutputMs === undefined ? null : row.startedAt + row.lastOutputMs,
++    outputTokens: reported ? measured : estimateTokensFromCharacterCounts(row.latin, row.cjk, model),
++    usageStatus: reported ? "reported" : "estimated", usageSource: reported ? "upstream" : "characters",
++    estimated: !reported, retries: Math.max(0, sends - 1), ...(terminalStatus ? { terminalStatus } : {}),
++  };
++}
++
++/** Register after admission, before the first upstream wait. The context is only weakly retained. */
++export function beginProviderActivity(context: Context, requestId: string, startedAt: number, signal?: AbortSignal, transport: "http" | "ws" = "http"): void {
++  try {
++    if (!enabled || byContext.has(context) || active.has(requestId) || active.size >= MAX_ACTIVE || signal?.aborted) return;
++    if (!label(requestId) || !Number.isFinite(startedAt)) return;
++    const reference = new WeakRef(context);
++    const onAbort = () => finishProviderActivity(reference.deref(), "aborted");
++    const row: Row = { requestId, startedAt, mono: performance.now(), transport,
++      context: reference, latin: 0, cjk: 0,
++      cleanup: () => signal?.removeEventListener("abort", onAbort) };
++    active.set(requestId, row); byContext.set(context, row);
++    signal?.addEventListener("abort", onAbort, { once: true });
++  } catch { /* Optional metrics never interrupt inference. */ }
++}
++
++/** Called only at one actual client-delivery tap; preflight inspectors never call this. */
++export function observeProviderActivity(context: Context | undefined, payload: unknown, transport: "http" | "ws" = "http"): void {
++  try {
++    if (!enabled || !context) return;
++    const row = byContext.get(context);
++    if (!row || row.transport !== transport || !payload || typeof payload !== "object") return;
++    const event = payload as { type?: unknown; delta?: unknown };
++    if (event.type === "response.output_item.added") { row.genStartMs ??= elapsed(row); return; }
++    if (typeof event.type !== "string" || !CONTENT_EVENTS.has(event.type) || typeof event.delta !== "string" || !event.delta.length) return;
++    const now = elapsed(row);
++    row.firstOutputMs ??= now; row.genStartMs ??= now; row.lastOutputMs = now;
++    // Match the existing estimator's script buckets, incrementally. No full-output allocation.
++    let cjk = 0;
++    for (let i = 0; i < event.delta.length; i++) {
++      const c = event.delta.charCodeAt(i);
++      if ((c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x11ff)
++        || (c >= 0x3130 && c <= 0x318f) || (c >= 0x4e00 && c <= 0x9fff)
++        || (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x3040 && c <= 0x30ff)) cjk++;
++    }
++    row.cjk += cjk; row.latin += event.delta.length - cjk;
++  } catch { /* Optional metrics never interrupt inference. */ }
++}
++
++export function finishProviderActivity(context: Context | undefined, terminalStatus = "completed"): void {
++  try {
++    if (!context) return;
++    const row = byContext.get(context);
++    if (!row) return;
++    active.delete(row.requestId); byContext.delete(context); row.cleanup();
++    finished.push({ at: performance.now(), value: project(row, terminalStatus) });
++    if (finished.length > MAX_FINISHED) finished.shift();
++  } catch { /* Cleanup is idempotent and cannot alter the final response. */ }
++}
++
++export function providerActivitySnapshot() {
++  const now = performance.now();
++  while (finished.length && now - finished[0]!.at > FINISHED_TTL_MS) finished.shift();
++  for (const [id, row] of active) {
++    if (elapsed(row) > MAX_AGE_MS || !row.context.deref()) {
++      active.delete(id); const context = row.context.deref(); if (context) byContext.delete(context); row.cleanup();
++    }
++  }
++  const requests = [...active.values()].map(row => project(row));
++  const providers: Record<string, { active: number; lastOutputAt: number | null }> = Object.create(null);
++  for (const request of requests) {
++    const key = request.provider as string;
++    const provider = providers[key] ??= { active: 0, lastOutputAt: null };
++    provider.active++;
++    if (typeof request.lastOutputAt === "number") provider.lastOutputAt = Math.max(provider.lastOutputAt ?? 0, request.lastOutputAt);
++  }
++  return { schemaVersion: 3, pid: process.pid, generatedAt: Date.now(), scope: "responses",
++    source: "provider-activity", supportsLive: enabled, providers, requests,
++    finishedRequests: finished.map(row => row.value), limits: { active: MAX_ACTIVE, finished: MAX_FINISHED } };
++}
+--- /dev/null
++++ b/tests/server/provider-activity.test.ts
+@@ -0,0 +1,400 @@
++import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
++import { pathToFileURL } from "node:url";
++import { estimateTokens } from "../../src/lib/token-estimate";
++import { repoPath, repoRoot } from "../helpers/repo-root";
++
++// Import with a deterministic startup gate; restore the caller's environment immediately.
++const originalGate = process.env.OPENCODEX_COMPANION_TELEMETRY;
++process.env.OPENCODEX_COMPANION_TELEMETRY = "1";
++const activity = await import("../../src/server/provider-activity");
++if (originalGate === undefined) delete process.env.OPENCODEX_COMPANION_TELEMETRY;
++else process.env.OPENCODEX_COMPANION_TELEMETRY = originalGate;
++const { beginProviderActivity: begin, observeProviderActivity: observe,
++  finishProviderActivity: finish, providerActivitySnapshot: snapshot } = activity;
++const { createSseInspector, trackSseForRequestLog } = await import("../../src/server/relay");
++type Context = Parameters<typeof begin>[0];
++type Transport = "http" | "ws";
++const epoch = 1_800_000_000_000;
++const maxAge = 30 * 60_000;
++let now = 0;
++let sequence = 0;
++let clock: ReturnType<typeof spyOn>;
++let contexts: Context[] = [];
++
++function context(overrides: Partial<Context> = {}): Context {
++  const value = { provider: "synthetic-provider", model: "gpt-test",
++    conversationId: "synthetic-session", ...overrides } as Context;
++  contexts.push(value);
++  return value;
++}
++function start(value = context(), transport: Transport = "http", signal?: AbortSignal) {
++  const id = `telemetry-test-${++sequence}`;
++  begin(value, id, epoch, signal, transport);
++  return { value, id };
++}
++function delta(value: Context, text: string, transport: Transport = "http", type = "response.output_text.delta") {
++  observe(value, { type, delta: text }, transport);
++}
++function row(id: string) {
++  return snapshot().requests.find(value => value.requestId === id)!;
++}
++
++beforeEach(() => {
++  clock = spyOn(performance, "now").mockImplementation(() => now);
++  now += maxAge + 10_001;
++  snapshot();
++});
++afterEach(() => {
++  for (const value of contexts) finish(value);
++  contexts = [];
++  now += maxAge + 10_001;
++  snapshot();
++  clock.mockRestore();
++});
++
++describe("provider activity timing and incremental estimates", () => {
++  test("waiting has no first output; first output freezes while last output advances", () => {
++    const { value, id } = start();
++    now += 70;
++    expect(row(id)).toMatchObject({ durationMs: 70, outputTokens: 0, estimated: true,
++      usageSource: "characters", lastOutputAt: null });
++    expect(row(id).firstOutputMs).toBeUndefined();
++    now += 30;
++    delta(value, "abcd");
++    expect(row(id)).toMatchObject({ firstOutputMs: 100, genStartMs: 100,
++      lastOutputMs: 100, lastOutputAt: epoch + 100, outputTokens: 1 });
++    now += 80;
++    delta(value, "中文");
++    expect(row(id)).toMatchObject({ firstOutputMs: 100, genStartMs: 100,
++      lastOutputMs: 180, durationMs: 180, outputTokens: estimateTokens("abcd中文", "gpt-test") });
++  });
++
++  for (const model of ["gpt-test", "kiro/claude-test", "claude-test", "qwen-test"]) {
++    test(`fragment totals match the canonical estimator for ${model}`, () => {
++      const { value, id } = start(context({ model }));
++      // Include every estimator script bucket, boundaries, and split surrogate pairs.
++      const text = "ab中韓한ᄀㄱ㐀あカ\u33ff\u4dc0\ud840\udc00🙂xy";
++      for (const unit of text.split("")) delta(value, unit);
++      expect(row(id).outputTokens).toBe(estimateTokens(text, model));
++      expect(row(id).outputTokens).toBeGreaterThan(0);
++    });
++  }
++
++  test("generation begins before visible output without inventing an early first token", () => {
++    const { value, id } = start();
++    now += 50; observe(value, { type: "response.output_item.added", item: { type: "reasoning" } });
++    expect(row(id).firstOutputMs).toBeUndefined();
++    expect(row(id).genStartMs).toBe(50);
++    now += 1000; delta(value, "abcd");
++    expect(row(id).genStartMs).toBe(50);
++    expect(row(id).firstOutputMs).toBe(1050);
++  });
++
++  test("each supported text, reasoning and tool delta contributes once", () => {
++    const { value, id } = start();
++    const types = ["response.output_text.delta", "response.reasoning_text.delta",
++      "response.reasoning_summary_text.delta", "response.function_call_arguments.delta",
++      "response.custom_tool_call_input.delta"];
++    for (const type of types) delta(value, "a中", "http", type);
++    expect(row(id).outputTokens).toBe(estimateTokens("a中".repeat(types.length), "gpt-test"));
++  });
++
++  test("empty/malformed deltas and non-output lifecycle, usage, audio and metadata do not count", () => {
++    const { value, id } = start();
++    const ignored: unknown[] = [null, undefined, 42, "text", {}, { delta: "body" },
++      { type: "response.output_text.delta", delta: "" },
++      { type: "response.output_text.delta", delta: { text: "body" } },
++      { type: "response.output_text.delta", delta: 1 }];
++    for (const type of ["response.created", "response.in_progress", "response.completed",
++      "response.failed", "response.output_item.added", "response.output_text.done",
++      "response.usage", "response.output_audio.delta", "ping"]) {
++      ignored.push({ type, delta: "must not count", response: { output: [{ text: "body" }] } });
++    }
++    for (const payload of ignored) observe(value, payload);
++    expect(row(id)).toMatchObject({ outputTokens: 0, lastOutputAt: null });
++    expect(row(id).firstOutputMs).toBeUndefined();
++  });
++});
++
++describe("provider activity isolation and terminal ownership", () => {
++  test("interleaved concurrent requests aggregate independently per provider", () => {
++    const a = start(context({ provider: "provider-a" }));
++    const b = start(context({ provider: "provider-b" }));
++    const c = start(context({ provider: "provider-a" }));
++    delta(a.value, "aaaa"); now += 25; delta(b.value, "中文");
++    expect(row(a.id).outputTokens).toBe(1);
++    expect(row(b.id).outputTokens).toBe(estimateTokens("中文"));
++    expect(row(c.id).outputTokens).toBe(0);
++    expect(snapshot().providers).toMatchObject({
++      "provider-a": { active: 2, lastOutputAt: epoch },
++      "provider-b": { active: 1, lastOutputAt: epoch + 25 },
++    });
++    finish(a.value);
++    expect(snapshot().providers["provider-a"]?.active).toBe(1);
++    expect(row(b.id)).toBeDefined();
++  });
++
++  test("HTTP/WS taps reject the other transport and repeated admission is idempotent", () => {
++    for (const transport of ["http", "ws"] as const) {
++      const { value, id } = start(undefined, transport);
++      begin(value, `${id}-duplicate`, epoch, undefined, transport);
++      delta(value, "abcd", "http"); delta(value, "abcd", "ws");
++      expect(row(id).outputTokens).toBe(1);
++      expect(row(`${id}-duplicate`)).toBeUndefined();
++    }
++    expect(snapshot().requests).toHaveLength(2);
++  });
++
++  test("duplicate request ids cannot let one context remove another's active row", () => {
++    const a = context(); const b = context();
++    begin(a, "duplicate-id", epoch);
++    begin(b, "duplicate-id", epoch);
++    finish(b, "failed");
++    // A collision may be rejected or tracked under a distinct id, but cannot orphan A.
++    expect(snapshot().requests.some(value => value.requestId === "duplicate-id")).toBe(true);
++    delta(a, "abcd");
++    expect(row("duplicate-id").outputTokens).toBe(1);
++  });
++
++  test("abort detaches listeners, freezes terminal output, and repeated finish is harmless", () => {
++    const controller = new AbortController();
++    const remove = spyOn(controller.signal, "removeEventListener");
++    try {
++      const { value, id } = start(undefined, "http", controller.signal);
++      now += 12; delta(value, "abcd"); now += 8;
++      controller.abort(); controller.abort(); finish(value, "failed");
++      delta(value, "must not count");
++      expect(row(id)).toBeUndefined();
++      expect(snapshot().finishedRequests).toHaveLength(1);
++      expect(snapshot().finishedRequests[0]).toMatchObject({ requestId: id,
++        terminalStatus: "aborted", durationMs: 20, firstOutputMs: 12, outputTokens: 1 });
++      now += 999;
++      expect(snapshot().finishedRequests[0]?.durationMs).toBe(20);
++      expect(remove).toHaveBeenCalledTimes(1);
++    } finally { remove.mockRestore(); }
++  });
++
++  for (const status of ["failed", "incomplete", "completed"]) {
++    test(`${status} cleans up exactly once, including a later abort`, () => {
++      const controller = new AbortController();
++      const remove = spyOn(controller.signal, "removeEventListener");
++      try {
++        const { value, id } = start(undefined, "http", controller.signal);
++        finish(value, status); finish(value, status); controller.abort();
++        observe(undefined, {}); finish(undefined);
++        expect(row(id)).toBeUndefined();
++        expect(snapshot().finishedRequests).toEqual([expect.objectContaining({ requestId: id, terminalStatus: status })]);
++        expect(remove).toHaveBeenCalledTimes(1);
++      } finally { remove.mockRestore(); }
++    });
++  }
++
++  test("already-aborted signals are never admitted", () => {
++    const controller = new AbortController(); controller.abort();
++    start(undefined, "http", controller.signal);
++    expect(snapshot().requests).toHaveLength(0);
++    expect(snapshot().finishedRequests).toHaveLength(0);
++  });
++
++  for (const estimated of [true, false]) {
++    test(`upstream usage estimated=${estimated} keeps provenance distinct`, () => {
++      const value = context({ usage: {
++        inputTokens: 10, outputTokens: 77, estimated,
++      } });
++      const { id } = start(value); delta(value, "abcd");
++      expect(row(id)).toMatchObject({ outputTokens: 1, usageStatus: "estimated", estimated: true });
++      finish(value);
++      expect(snapshot().finishedRequests[0]).toMatchObject(estimated
++        ? { outputTokens: 1, usageStatus: "estimated", estimated: true, usageSource: "characters" }
++        : { outputTokens: 77, usageStatus: "reported", estimated: false, usageSource: "upstream" });
++    });
++  }
++
++  test("invalid reported counts fall back to characters; reported zero stays authoritative", () => {
++    for (const count of [NaN, Infinity, -1, 0]) {
++      const value = context({ usage: { inputTokens: 0, outputTokens: count } });
++      start(value); delta(value, "abcd"); finish(value);
++      const final = snapshot().finishedRequests.at(-1)!;
++      expect(final.outputTokens).toBe(count === 0 ? 0 : 1);
++      expect(final.estimated).toBe(count !== 0);
++    }
++  });
++});
++
++describe("provider activity resource and privacy boundaries", () => {
++  test("128 active cap drops overflow and admits again after completion", () => {
++    const admitted = Array.from({ length: 128 }, () => start());
++    const overflow = start();
++    expect(snapshot().limits).toEqual({ active: 128, finished: 32 });
++    expect(snapshot().requests).toHaveLength(128);
++    expect(row(overflow.id)).toBeUndefined();
++    delta(overflow.value, "ignored"); finish(overflow.value);
++    expect(snapshot().finishedRequests).toHaveLength(0);
++    finish(admitted[0]!.value);
++    const replacement = start();
++    expect(snapshot().requests).toHaveLength(128);
++    expect(row(replacement.id)).toBeDefined();
++  });
++
++  test("32 finished cap retains newest rows and expires after 10 seconds without timers", () => {
++    const ids: string[] = [];
++    for (let i = 0; i < 35; i++) {
++      const { value, id } = start(); ids.push(id); finish(value);
++    }
++    expect(snapshot().finishedRequests.map(value => value.requestId)).toEqual(ids.slice(-32));
++    now += 10_000;
++    expect(snapshot().finishedRequests).toHaveLength(32);
++    now += 1;
++    expect(snapshot().finishedRequests).toHaveLength(0);
++  });
++
++  test("30-minute active timeout clears weak-map admission and abort listener lazily", () => {
++    const controller = new AbortController();
++    const remove = spyOn(controller.signal, "removeEventListener");
++    try {
++      const { value, id } = start(undefined, "http", controller.signal);
++      now += maxAge;
++      expect(row(id)).toBeDefined();
++      now += 1;
++      expect(row(id)).toBeUndefined();
++      expect(remove).toHaveBeenCalledTimes(1);
++      expect(snapshot().finishedRequests).toHaveLength(0);
++      const replacement = start(value);
++      expect(row(replacement.id)).toBeDefined();
++    } finally { remove.mockRestore(); }
++  });
++
++  test("only whitelisted labels and numeric projections escape; payload getters stay unread", () => {
++    const body = "SYNTHETIC_BODY_DO_NOT_RETAIN_中文";
++    const secret = "SYNTHETIC_CREDENTIAL_!@#$";
++    const value = context({ provider: secret, model: "bad\nmodel", conversationId: "x".repeat(101) });
++    Object.assign(value, { requestBody: body, apiKey: secret, headers: { authorization: secret } });
++    const { id } = start(value);
++    const payload = { type: "response.output_text.delta", delta: body,
++      get request() { throw new Error("must not inspect request body"); },
++      get credentials() { throw new Error("must not inspect credentials"); } };
++    observe(value, payload);
++    expect(row(id).outputTokens).toBe(estimateTokens(body));
++    expect(row(id)).toMatchObject({ provider: "unknown" });
++    expect(row(id).model).toBeUndefined(); expect(row(id).conversationId).toBeUndefined();
++    finish(value);
++    const serialized = JSON.stringify(snapshot());
++    for (const forbidden of [body, secret, "requestBody", "apiKey", "authorization", "credentials", '"delta"']) {
++      expect(serialized).not.toContain(forbidden);
++    }
++  });
++
++  test("the retained activity row contains counts, a weak context and no body or payload", () => {
++    const body = "SYNTHETIC_PRIVATE_BODY_中文".repeat(1_000);
++    const value = context();
++    Object.assign(value, { requestBody: body });
++    let retained: Record<string, unknown> | undefined;
++    const originalSet = WeakMap.prototype.set;
++    const tap = spyOn(WeakMap.prototype, "set").mockImplementation(function (
++      this: WeakMap<WeakKey, unknown>, key: WeakKey, record: unknown,
++    ) {
++      if (key === value) retained = record as Record<string, unknown>;
++      return originalSet.call(this, key, record);
++    });
++    try {
++      const { id } = start(value);
++      delta(value, body);
++      expect(retained).toBeDefined();
++      expect(retained!.context).toBeInstanceOf(WeakRef);
++      for (const field of Object.values(retained!)) {
++        if (typeof field === "number") expect(Number.isFinite(field)).toBe(true);
++        else if (typeof field === "string") expect([id, "http"]).toContain(field);
++        else expect(field instanceof WeakRef || typeof field === "function").toBe(true);
++      }
++      expect(JSON.stringify(retained)).not.toContain(body);
++      expect(row(id).outputTokens).toBe(estimateTokens(body, "gpt-test"));
++      finish(value);
++      expect(JSON.stringify(snapshot().finishedRequests)).not.toContain(body);
++    } finally { tap.mockRestore(); }
++  });
++
++  test("non-string labels, invalid ids and invalid start times never serialize as metadata", () => {
++    const value = context({ provider: { secret: "synthetic" }, model: ["model"],
++      conversationId: 42 } as unknown as Partial<Context>);
++    const { id } = start(value);
++    expect(row(id)).toMatchObject({ provider: "unknown" });
++    expect(row(id).model).toBeUndefined(); expect(row(id).conversationId).toBeUndefined();
++    for (const requestId of ["", "bad\nid", "x".repeat(101)]) begin(context(), requestId, epoch);
++    for (const startedAt of [NaN, Infinity, -Infinity]) begin(context(), `invalid-${startedAt}`, startedAt);
++    expect(snapshot().requests).toHaveLength(1);
++  });
++
++  test("registration, observation, finish and snapshot install no timers", () => {
++    const timeout = spyOn(globalThis, "setTimeout");
++    const interval = spyOn(globalThis, "setInterval");
++    try {
++      const { value } = start(); delta(value, "abcd"); snapshot(); finish(value); snapshot();
++      expect(timeout).not.toHaveBeenCalled(); expect(interval).not.toHaveBeenCalled();
++    } finally { timeout.mockRestore(); interval.mockRestore(); }
++  });
++
++  test("startup env=0 hard-disables all activity in an isolated Bun process", () => {
++    const moduleUrl = pathToFileURL(repoPath("src", "server", "provider-activity.ts")).href;
++    const result = Bun.spawnSync([process.execPath, "--eval", `
++      const t = await import(${JSON.stringify(moduleUrl)});
++      const c = { provider: "synthetic", model: "gpt-test" };
++      t.beginProviderActivity(c, "disabled", 100);
++      t.observeProviderActivity(c, { type: "response.output_text.delta", delta: "abcd" });
++      t.finishProviderActivity(c);
++      console.log(JSON.stringify(t.providerActivitySnapshot()));
++    `], { cwd: repoRoot(), env: { SystemRoot: process.env.SystemRoot,
++      OPENCODEX_COMPANION_TELEMETRY: "0" }, stdout: "pipe", stderr: "pipe" });
++    expect(result.exitCode).toBe(0);
++    expect(result.stderr.toString()).toBe("");
++    expect(JSON.parse(result.stdout.toString())).toMatchObject({ supportsLive: false,
++      requests: [], finishedRequests: [], providers: {} });
++  });
++});
++
++describe("real SSE inspector delivery tap", () => {
++  test("arbitrarily split UTF-8/CRLF frames remain byte-exact and parse once per event", async () => {
++    const { value, id } = start();
++    const text = "abc中文🙂";
++    const wire = new TextEncoder().encode(": keepalive\r\n\r\nevent: response.output_text.delta\r\ndata: "
++      + JSON.stringify({ type: "response.output_text.delta", delta: text })
++      + "\r\n\r\ndata: " + JSON.stringify({ type: "response.completed", response: { status: "completed" } })
++      + "\n\ndata: [DONE]\n\n");
++    let parses = 0;
++    const parse = spyOn(JSON, "parse");
++    const originalParse = parse.getMockImplementation();
++    parse.mockImplementation((...args: Parameters<typeof JSON.parse>) => {
++      parses++; return originalParse!(...args);
++    });
++    const received: number[] = [];
++    const inspector = createSseInspector({
++      onParsedPayload: payload => observe(value, payload),
++      onTerminal: status => finish(value, status),
++    });
++    try {
++      const stream = new ReadableStream<Uint8Array>({ start(controller) {
++        for (const byte of wire) controller.enqueue(Uint8Array.of(byte));
++        controller.close();
++      } });
++      for await (const chunk of stream) {
++        inspector.feed(chunk);
++        received.push(...chunk);
++      }
++      inspector.finish();
++      expect(Uint8Array.from(received)).toEqual(wire);
++      expect(parses).toBe(2);
++      expect(row(id)).toBeUndefined();
++      expect(snapshot().finishedRequests[0]).toMatchObject({ requestId: id,
++        outputTokens: estimateTokens(text, "gpt-test"), terminalStatus: "completed" });
++    } finally { inspector.dispose(); parse.mockRestore(); }
++  });
++
++  test("existing request-log delivery wrapper counts HTTP only and preserves bytes", async () => {
++    const { value, id } = start();
++    const wire = new TextEncoder().encode('data: {"type":"response.output_text.delta","delta":"abcd"}\n\n');
++    const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(wire); controller.close(); } });
++    const tracked = trackSseForRequestLog(body, status => finish(value, status), () => finish(value, "aborted"),
++      value as Parameters<typeof trackSseForRequestLog>[3]);
++    expect(new Uint8Array(await new Response(tracked).arrayBuffer())).toEqual(wire);
++    expect(snapshot().finishedRequests[0]).toMatchObject({ requestId: id, outputTokens: 1, terminalStatus: "incomplete" });
++  });
++});

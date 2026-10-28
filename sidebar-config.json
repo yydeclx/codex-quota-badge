@@ -1,0 +1,25 @@
+{
+  "shortcuts": [],
+  "services": [],
+  "refreshSeconds": 60,
+  "items": [
+    {
+      "enabled": true,
+      "gapAfter": 3,
+      "id": "chatgpt_today",
+      "provider": "openai",
+      "label": "ChatGPT",
+      "type": "opencodex_today"
+    },
+    {
+      "enabled": true,
+      "gapAfter": 0,
+      "id": "weekly_quota",
+      "type": "weekly_quota",
+      "label": "周额度"
+    }
+  ],
+  "realtimeMetricsEnabled": false,
+  "version": 1,
+  "activityEnabled": true
+}

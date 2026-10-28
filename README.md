@@ -8,7 +8,13 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.3.9](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.3.9)**
+> 当前最新版本：**[v1.5.0](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.0)**
+
+## v1.5.0 更新
+
+修复额度日期与来源归因、每日总量堆叠、管理页与状态中心、负间距和滚动显示；减少后台无效工作，补齐发布依赖。当前界面保持已部署设计，不包含设计示例。
+
+普通包约 202 KB；可选 OpenCodex 2.92.0 Windows x64 补丁附件需单独下载并显式启用。新装默认关闭补丁，原有安装保留配置与历史。[安装与更新说明](PORTABLE-INSTALL.md)
 
 ## 你可以看到什么
 
@@ -90,7 +96,7 @@ Windows 脚本使用 PowerShell 7。首次安装、跨电脑配置和更新保�
 - 重置监测使用公开的只读预测和信号数据，并缓存最后一次成功结果
 - 插件不保存模型正文、密钥或管理员令牌
 - 状态中心只读取脱敏快照，诊断复制使用字段白名单
-- 插件不会启动、停止或修改 OpenCodex 网关，也不会发送模型请求
+- 普通侧栏安装与更新不会切换 OpenCodex 网关，也不会发送模型请求；仅显式开启或关闭可选实时指标补丁时，才校验并切换受支持的 2.92.0 网关
 
 ## 自动更新
 
@@ -99,7 +105,7 @@ Windows 脚本使用 PowerShell 7。首次安装、跨电脑配置和更新保�
 本项目同时使用：
 
 - Git 提交：保存源码历史和差异
-- Git tag：标记源码版本，例如 ~v1.3.9~
+- Git tag：标记源码版本，例如 ~v1.5.0~
 - GitHub Release：提供可安装 ZIP 和校验值
 
 ## 开发与验证
