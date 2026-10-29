@@ -15,37 +15,42 @@ class ModuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             h=QuotaHistory(Path(folder)/'history.json');stamp=dt.datetime(2026,9,29,10).timestamp();reset=stamp+5*86400
             def put(t,n,r=reset):h.observe({'updatedAt':t,'remaining':n,'resetsAt':r})
-            put(stamp,80);put(stamp+300,78);put(stamp+300,78)
-            self.assertEqual(h.view()['days']['2026-09-29']['points'],2)
+            put(stamp,80);initial_today=h.view()['days']['2026-09-29']['points']
+            put(stamp+300,78);before_duplicate=copy.deepcopy(h.view());put(stamp+300,78)
+            self.assertEqual(h.view(),before_duplicate)
+            self.assertAlmostEqual(h.view()['days']['2026-09-29']['points'],initial_today+2,places=4)
             put(stamp+600,79);self.assertEqual(h.view()['corrections'],1)
-            put(stamp+3000,75);self.assertEqual(h.view()['unknownUsed'],25);self.assertEqual(h.view()['days']['2026-09-29']['points'],5)
-            put(stamp+3300,99,reset+86400);self.assertEqual(h.view()['unknownUsed'],1)
+            put(stamp+3000,75);self.assertEqual((h.view()['localUsed'],h.view()['otherUsed']),(12.5,12.5))
+            self.assertAlmostEqual(h.view()['days']['2026-09-29']['points'],initial_today+5,places=4)
+            put(stamp+3300,99,reset+86400);self.assertEqual((h.view()['localUsed'],h.view()['otherUsed']),(.5,.5))
             self.assertEqual(len(h.data['cycles']),2)
-    def test_same_day_long_gap_has_known_date_but_unknown_source(self):
+    def test_same_day_long_gap_uses_neutral_prior_without_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
             h=QuotaHistory(Path(folder)/'h.json')
             t=dt.datetime(2026,10,27,9).timestamp();reset=t+6*86400
             h.observe({'updatedAt':t,'remaining':100,'resetsAt':reset})
             h.observe({'updatedAt':t+6*3600,'remaining':90,'resetsAt':reset})
             cycle=h.view()
-            self.assertEqual(cycle['unknownUsed'],10)
-            self.assertEqual(cycle['unknownDays']['2026-10-27']['points'],10)
+            self.assertEqual((cycle['localUsed'],cycle['otherUsed']),(5,5))
+            self.assertEqual(cycle['localDays']['2026-10-27']['points'],5)
+            self.assertEqual(cycle['otherDays']['2026-10-27']['points'],5)
             self.assertEqual(cycle['days']['2026-10-27']['points'],10)
     def test_cross_midnight_drop_is_not_forced_into_today(self):
         with tempfile.TemporaryDirectory() as folder:
             h=QuotaHistory(Path(folder)/'h.json')
-            today=dt.datetime.now().date()
+            today=dt.date(2026,10,28)
             before_midnight=dt.datetime.combine(today-dt.timedelta(days=1),dt.time(23,55)).timestamp()
             after_midnight=dt.datetime.combine(today,dt.time(0,5)).timestamp()
             reset=after_midnight+6*86400
             h.observe({'updatedAt':before_midnight,'remaining':100,'resetsAt':reset})
             h.observe({'updatedAt':after_midnight,'remaining':90,'resetsAt':reset})
             cycle=h.view();key=today.isoformat()
-            self.assertEqual(cycle['unknownUsed'],10)
-            self.assertNotIn(key,cycle['days'])
-    def test_migration_does_not_date_undated_other_by_last_sample(self):
+            self.assertEqual((cycle['localUsed'],cycle['otherUsed']),(5,5))
+            self.assertEqual(cycle['days'][key]['points'],5)
+            self.assertEqual(cycle['days'][(today-dt.timedelta(days=1)).isoformat()]['points'],5)
+    def test_migration_distributes_missing_other_dates_across_the_cycle(self):
         with tempfile.TemporaryDirectory() as folder:
-            today=dt.datetime.now().date()
+            today=dt.date(2026,10,28)
             last_at=dt.datetime.combine(today,dt.time(10,0)).timestamp()
             path=Path(folder)/'h.json'
             path.write_text(json.dumps({'version':4,'cycles':[{
@@ -56,18 +61,20 @@ class ModuleTests(unittest.TestCase):
                 'otherDays':{},'localUsed':40,'otherUsed':14,'unallocated':0,
             }]}),encoding='utf-8')
             h=QuotaHistory(path);cycle=h.view();key=today.isoformat()
-            self.assertEqual(cycle['days'][key]['points'],40)
-            self.assertNotIn(key,cycle['otherDays'])
+            self.assertGreaterEqual(cycle['days'][key]['points'],40)
+            self.assertGreater(sum(row['points'] for day,row in cycle['otherDays'].items() if day!=key),0)
             self.assertEqual(cycle['otherUsed'],14)
+            self.assertAlmostEqual(sum(row['points'] for row in cycle['days'].values()),54,places=4)
             h2=QuotaHistory(path);cycle2=h2.view()
-            self.assertEqual(cycle2['days'][key]['points'],40)
-            self.assertEqual(cycle2['otherDays'],{})
+            self.assertEqual(cycle2,cycle)
     def test_midnight_never_assigns_all_to_next_day(self):
         with tempfile.TemporaryDirectory() as folder:
             h=QuotaHistory(Path(folder)/'h.json');t=dt.datetime(2026,9,29,23,59).timestamp()
             h.observe({'updatedAt':t,'remaining':100,'resetsAt':t+86400})
             h.observe({'updatedAt':t+120,'remaining':98,'resetsAt':t+86400})
-            self.assertEqual(h.view()['unknownUsed'],2);self.assertEqual(h.view()['unallocated'],0);self.assertEqual(h.view()['days'],{})
+            cycle=h.view();self.assertEqual((cycle['localUsed'],cycle['otherUsed']),(1,1))
+            self.assertEqual(cycle['days']['2026-09-29']['points'],1)
+            self.assertEqual(cycle['days']['2026-09-30']['points'],1)
     def test_complete_samples_split_local_and_other_usage(self):
         with tempfile.TemporaryDirectory() as folder:
             h=QuotaHistory(Path(folder)/'h.json');t=dt.datetime(2026,10,23,10).timestamp();reset=t+6*86400
@@ -79,7 +86,7 @@ class ModuleTests(unittest.TestCase):
             self.assertEqual(cycle['localUsed'],2)
             self.assertEqual(cycle['otherUsed'],1)
             self.assertEqual(cycle['completeSamples'],3)
-    def test_noncomplete_poll_never_claims_local_usage(self):
+    def test_fresh_counter_growth_can_attribute_local_without_complete_flag(self):
         with tempfile.TemporaryDirectory() as folder:
             h=QuotaHistory(Path(folder)/'h.json');t=dt.datetime(2026,10,23,10).timestamp();reset=t+6*86400
             usage={'date':'2026-10-23','totalTokens':100,'requests':1,'updatedAt':t}
@@ -91,19 +98,18 @@ class ModuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'history.json';path.write_text(json.dumps({'version':1,'cycles':[{'days':{}}]}),encoding='utf-8')
             h=QuotaHistory(path)
-            self.assertEqual(h.data['version'],5)
-            self.assertTrue(path.with_name('history.schema1-backup.json').exists())
+            self.assertEqual(h.data['version'],6)
+            self.assertTrue(any(p.exists() for p in (path.with_name('history.schema5-backup.json'),path.with_name('history.schema1-backup.json'))))
             self.assertEqual(h.data['cycles'][0]['localDays'],{})
-    def test_unallocated_history_keeps_its_unconfirmed_source(self):
+    def test_legacy_unallocated_history_uses_smoothed_source_prior(self):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'history.json'
             path.write_text(json.dumps({'version':3,'cycles':[{'days':{},'localDays':{},'otherDays':{},'localUsed':4,'otherUsed':2,'unallocated':8}]}),encoding='utf-8')
             h=QuotaHistory(path);cycle=h.view()
-            self.assertEqual(h.data['version'],5)
-            self.assertEqual(cycle['otherUsed'],2)
-            self.assertEqual(cycle['unknownUsed'],8)
-            self.assertEqual(cycle['unallocated'],0)
-            self.assertEqual(cycle['attributionMethod'],'local-activity-estimate-v4')
+            self.assertEqual(h.data['version'],6)
+            self.assertEqual((cycle['localUsed'],cycle['otherUsed']),(9,5))
+            for key in ('unknownUsed','unknownDays','unallocated'):self.assertNotIn(key,cycle)
+            self.assertEqual(sum(row['points'] for row in cycle['days'].values()),14)
     def test_delayed_settlement_inherits_local_attribution_once(self):
         with tempfile.TemporaryDirectory() as folder:
             h=QuotaHistory(Path(folder)/'h.json');t=dt.datetime(2026,10,23,10).timestamp();reset=t+6*86400

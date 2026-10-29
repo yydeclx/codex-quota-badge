@@ -376,17 +376,15 @@ class Details:
         reset=dt.datetime.fromtimestamp(cycle['reset']);hours=max(0,int((cycle['reset']-time.time())/3600))
         self.card('距重置',f'{hours//24} 天 {hours%24} 小时 · {reset:%m/%d %H:%M}')
         from quota_accounting import quota_breakdown
-        summary=quota_breakdown(cycle,q.get('remaining'),cycle['reset'])
+        summary=quota_breakdown(cycle,q.get('remaining'),cycle['reset'],sample_at=q.get('updatedAt'))
         labels=summary['labels'];description=f"总 {labels['total']}% · 本机 {labels['local']}% · 非本机 {labels['other']}%"
-        if labels['unknown']!='0':description+=f" · 来源待定 {labels['unknown']}%"
         body=self.card('本周期 · 消耗归因（估算）',description)
         for row in summary['days']:
             day=row['day']
             if day>dt.date.today():break
             labels=row['labels'];value=f"总 {labels['total']}% · 本机 {labels['local']}% · 非本机 {labels['other']}%" if row['total'] is not None else '暂无记录'
-            if labels['unknown']!='0':value+=f" · 待定 {labels['unknown']}%"
             self.label(body,f'{day:%m/%d}     {value}',11,bold=day==dt.date.today(),muted=row['total'] is None).pack(anchor='w',fill='x',pady=self.p(5))
-        self.card('记录范围',f"从 {dt.datetime.fromtimestamp(cycle['firstAt']):%m/%d %H:%M} 开始采样。\n本机按活动与用量增量估算；证据不足时保留来源待定，跨日缺少采样时保留日期待定位。"+(f"\n检测到 {cycle['corrections']} 次额度回调，已从消耗中扣减。" if cycle['corrections'] else ''))
+        self.card('记录范围',f"从 {dt.datetime.fromtimestamp(cycle['firstAt']):%m/%d %H:%M} 开始采样。\n归因估算：结合额度采样与本机用量/活动；断档按比例估算分配，非官方精确归因。"+(f"\n检测到 {cycle['corrections']} 次额度回调，已从消耗中扣减。" if cycle['corrections'] else ''))
     def diagnostics_page(self):
         snapshot=self.snapshot;quota=snapshot.get('quota') or {};cycle=snapshot.get('quotaHistory') or {};extra=snapshot.get('diagnostics') or {}
         runtime=self.runtime_status or {};sidebar=self.sidebar_status or {};usage=sidebar.get('usage') or {}

@@ -12,7 +12,7 @@ import threading
 import time
 from urllib.parse import urlparse
 from sidebar_data import ROOT
-from quota_accounting import reconcile_cycle,apply_credit,add_points,date_at,number
+from quota_accounting import reconcile_cycle,apply_credit,add_points,date_at,number,add_interval,estimate_share
 
 MODULES={'tasks_pending':('待处理','等待确认或补充信息'), 'tasks_running':('运行中','本机会话的当前回合'),
          'tasks_done':('待查看','已完成且 Codex 标记为未读'), 'services':('本地服务','检查配置的本机端口'),
@@ -58,9 +58,9 @@ class QuotaHistory:
         self._migrate()
     def _migrate(self):
         version=self.data.get('version',1) if isinstance(self.data,dict) else 1
-        backup=self.path.with_name(self.path.stem+('.schema1-backup' if version<4 else '.schema4-backup')+self.path.suffix)
-        if version<5 and self.path.exists() and not backup.exists():backup.write_bytes(self.path.read_bytes())
-        updated={**self.data,'version':5,'cycles':[]}
+        backup=self.path.with_name(self.path.stem+('.schema1-backup' if version<4 else '.schema4-backup' if version<5 else '.schema5-backup')+self.path.suffix)
+        if version<6 and self.path.exists() and not backup.exists():backup.write_bytes(self.path.read_bytes())
+        updated={**self.data,'version':6,'cycles':[]}
         for source in self.data.get('cycles',[]):
             cycle=reconcile_cycle(source)
             cycle.setdefault('completeSamples',0);cycle.setdefault('lastBoundaryAt',None)
@@ -103,9 +103,8 @@ class QuotaHistory:
                      and self._comparable_usage(cycle.get('lastLocalUsage'),local_usage)
                      and cycle['lastLocalUsage'].get('date')==local_usage.get('date')
                      and all(cycle['lastLocalUsage'].get(key)==local_usage.get(key) for key in ('totalTokens','requests')))
-            aggregate,daily=('localUsed','localDays') if local_match else ('otherUsed','otherDays') if covered and not local_evidence else ('unknownUsed','unknownDays')
-            cycle[aggregate]=round(cycle.get(aggregate,0)+delta,4)
-            if day==previous:add_points(cycle[daily],day,delta,True)
+            share=estimate_share(cycle,gap,local_evidence,covered)
+            add_interval(cycle,cycle['lastAt'],stamp,delta,share)
             if local_match:cycle['pendingLocalAt']=None
         elif day==previous:cycle['days'].setdefault(day,{'points':0,'samples':0})
         if complete:
@@ -130,7 +129,7 @@ class QuotaHistory:
     @staticmethod
     def _local_increased(cycle,usage):
         previous=cycle.get('lastLocalUsage')
-        if not isinstance(previous,dict) or not isinstance(usage,dict):return False
+        if not QuotaHistory._comparable_usage(previous,usage):return False
         if not 0<=number(usage.get('updatedAt'))-number(previous.get('updatedAt'))<=900:return False
         if previous.get('date')!=usage.get('date'):
             return QuotaHistory._comparable_usage(previous,usage) and (usage.get('totalTokens',0)>0 or usage.get('requests',0)>0)

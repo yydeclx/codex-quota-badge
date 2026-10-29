@@ -132,7 +132,7 @@ def render_panel(scale,title,rows,focus=None,footer='',width=298):
 
 
 @raster_cache
-def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_hour=None,plan_type=None,reset_signal=None):
+def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_hour=None,plan_type=None,reset_signal=None,sample_at=None):
     import datetime as dt
     import time
     ss=scale*3;p=lambda v:round(v*ss);width=264
@@ -246,29 +246,23 @@ def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_
         text(left_center,78.5+module_offset,label,3,color,'mm')
     d.line((p(18),p(92+module_offset),p(width-18),p(92+module_offset)),fill='#e7e6e3',width=p(.5))
     today=dt.date.fromisoformat(day_key) if day_key else dt.date.today()
-    summary=quota_breakdown(cycle,safe_remaining,reset,day_key)
+    summary=quota_breakdown(cycle,safe_remaining,reset,day_key,sample_at)
     days=[row['day'] for row in summary['days']]
     totals=[row['total'] for row in summary['days']]
     locals_=[row['local'] for row in summary['days']]
     others=[row['other'] for row in summary['days']]
-    unknowns=[row['unknown'] for row in summary['days']]
-    cycle_total_used=summary['total'];cycle_local=summary['local'];cycle_other=summary['other']
     if focus is not None and 0<=focus<len(days):
         selected_total=totals[focus]
-        selected_local=locals_[focus]
-        selected_other=others[focus]
         labels=summary['days'][focus]['labels']
         title=(f"{days[focus]:%m/%d}  总{labels['total']}% · 本机{labels['local']}% · 非本机{labels['other']}%"
                if selected_total is not None else f'{days[focus]:%m/%d} · 尚未记录')
-        if labels['unknown']!='0':title+=f" · 待定{labels['unknown']}%"
     else:
         title=f"周期总{summary['labels']['total']}% · 归因估算"
-        if summary['undated']>0:title+=f" · 日期待定位{summary['undated']:g}%"
     title_font=fonts[3] if d.textlength(title,font=fonts[3])<=p(width-36) else ui_font('C:/Windows/Fonts/msyh.ttc',p(8))
     d.text((p(18),p(102+module_offset)),title,font=title_font,fill='#555550')
     plot_left,plot_right=22,width-22
     step=(plot_right-plot_left)/len(days);maximum=max([v for v in totals if v is not None]+[1]);actions=[]
-    for i,(day,total,local,other,unknown) in enumerate(zip(days,totals,locals_,others,unknowns)):
+    for i,(day,total,local,other) in enumerate(zip(days,totals,locals_,others)):
         x=plot_left+(i+.5)*step;baseline=201+module_offset
         if focus==i:d.rounded_rectangle((p(x-step/2+2),p(122+module_offset),p(x+step/2-2),p(209+module_offset)),radius=p(5),fill='#f0efed')
         if total is not None:
@@ -276,7 +270,7 @@ def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_
             if total>0:
                 bar_width=p(16);bar_height=max(1,p(baseline)-p(baseline-h))
                 bar=Image.new('RGBA',(bar_width,bar_height));paint=ImageDraw.Draw(bar);used=0
-                for amount,color in ((local,'#5d5d59'),(other,'#b9b8b3'),(unknown,'#deddd9')):
+                for amount,color in ((local,'#5d5d59'),(other,'#b9b8b3')):
                     bottom=round(bar_height*(1-used/total));used+=amount;top=round(bar_height*(1-used/total))
                     if bottom>top:paint.rectangle((0,top,bar_width-1,bottom-1),fill=color)
                 mask=Image.new('L',bar.size);ImageDraw.Draw(mask).rounded_rectangle((0,0,bar_width-1,bar_height-1),radius=min(p(2),bar_height/2),fill=255)
@@ -296,5 +290,4 @@ def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_
         x+=d.textlength(label,font=legend_font)/ss+gap
     legend_item(f"本机 {summary['labels']['local']}%", '#5d5d59')
     legend_item(f"非本机 {summary['labels']['other']}%", '#b9b8b3')
-    if summary['labels']['unknown']!='0':legend_item(f"待定 {summary['labels']['unknown']}%", '#deddd9', '#999892', 0)
     return im.resize((round(width*scale),round(height*scale)),Image.Resampling.LANCZOS),actions

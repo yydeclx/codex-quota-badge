@@ -94,7 +94,7 @@ class StabilityTests(unittest.TestCase):
             h.observe({'remaining':79,'resetsAt':2000001,'updatedAt':1000010})
             h.observe({'remaining':78,'resetsAt':2000000,'updatedAt':1000020})
             self.assertEqual(len(h.data['cycles']),1)
-            self.assertEqual(sum(d['points'] for d in h.view()['days'].values()),2)
+            self.assertEqual(sum(d['points'] for d in h.view()['days'].values()),22)  # Includes the estimated initial 20-point gap.
             h.observe({'remaining':100,'resetsAt':2604800,'updatedAt':2000001})
             self.assertEqual(len(h.data['cycles']),2)
 

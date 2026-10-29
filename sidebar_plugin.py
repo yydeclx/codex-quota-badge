@@ -430,7 +430,7 @@ class SidebarPlugin(Badge):
         if item['type']=='weekly_quota':
             self.hover_actions=[]
             from hover_panel import render_quota_chart
-            cycle={k:v for k,v in (self.quota_history.view() or {}).items() if k not in ('lastAt','lastRemaining')};valid=self.valid();focus=getattr(self,'hover_focus',None)
+            cycle=self.quota_history.view() or {};cache_cycle={k:v for k,v in cycle.items() if k not in ('lastAt','lastRemaining')};valid=self.valid();focus=getattr(self,'hover_focus',None)
             remaining=self.data['remaining'] if valid else None;reset=self.data.get('resetsAt') if valid else cycle.get('reset')
             five_hour=self.data.get('fiveHour') if valid else None
             plan_type=self.data.get('planType') if valid else None
@@ -440,9 +440,9 @@ class SidebarPlugin(Badge):
             if isinstance(age,(int,float)):
                 reset_signal={**reset_signal,'syncAgeSeconds':min(3600,max(0,int(age//60)*60))}
             countdown_tick=int(time.time()/60) if isinstance((reset_signal.get('explicitSignal') or {}).get('targetAt'),(int,float)) else 0
-            key=(item['id'],remaining,reset,str(five_hour),plan_type,str(cycle),str(reset_signal),countdown_tick,focus,self.scale,dt.date.today())
+            key=(item['id'],remaining,reset,str(five_hour),plan_type,str(cache_cycle),str(reset_signal),countdown_tick,focus,self.scale,dt.date.today())
             if key!=self.last_tooltip_text:
-                self.tooltip_surface,self.quota_actions=render_quota_chart(self.scale,remaining,reset,cycle,focus,dt.date.today().isoformat(),five_hour,plan_type,reset_signal)
+                self.tooltip_surface,self.quota_actions=render_quota_chart(self.scale,remaining,reset,cycle,focus,dt.date.today().isoformat(),five_hour,plan_type,reset_signal,sample_at=self.data.get('updatedAt') if valid else None)
                 upload(self.win,self.tooltip,self.tooltip_surface);self.last_tooltip_text=key
                 if self.tooltip_active:self.position_tooltip()
             self.hover_actions=getattr(self,'quota_actions',[])

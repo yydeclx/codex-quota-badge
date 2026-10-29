@@ -8,7 +8,11 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.5.2](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.2)**
+> 当前最新版本：**[v1.5.3](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.3)**
+
+## v1.5.3 更新
+
+周额度归因统一为本机、非本机两项。缺少证据时，按本机用量/活动、采样间隔和历史比例估算归因，日期断档按可能时间段分摊。两色柱状图、悬停及状态中心使用同一账本，日/周期/来源总量和显示舍入均闭合；旧历史备份后迁移。[算法说明](docs/QUOTA-ATTRIBUTION.md)
 
 ## v1.5.2 更新
 
