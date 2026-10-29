@@ -8,7 +8,11 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.5.1](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.1)**
+> 当前最新版本：**[v1.5.2](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.2)**
+
+## v1.5.2 更新
+
+补齐 v1.5.1 发布时遗漏的、已在本机完成的修改：底部相关会话改为单行，标题加大加粗，右侧模型胶囊保留来源前缀并使用轻微阴影；列表宽 280 DIP、行高 30 DIP，长标题优先省略。另补齐额度读取失败后的有限重试、退避恢复与诊断状态。保留 v1.5.1 的 owned popup 布局、悬停和升级迁移修复。
 
 ## v1.5.1 更新
 

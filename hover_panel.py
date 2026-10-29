@@ -13,13 +13,35 @@ def topic_row(task,status):
     state={'running':'运行中','completed':'未读'}.get(status,'待处理')
     return (task['title'],state+' · '+model,('thread',task['id']),status)
 
+
+TOPIC_PANEL_WIDTH=280
+TOPIC_ROW_HEIGHT=30
+
+
+def _fit_line(draw,text,font,width):
+    """Bounded ellipsis, including when a label has no available space."""
+    if draw.textlength(text,font=font)<=width:return text
+    if draw.textlength('…',font=font)>width:return ''
+    low,high=0,len(text)
+    while low<high:
+        middle=(low+high+1)//2
+        if draw.textlength(text[:middle]+'…',font=font)<=width:low=middle
+        else:high=middle-1
+    return text[:low]+'…'
+
+
+def _center_line(draw,x,y,text,font,fill):
+    bounds=draw.textbbox((0,0),text,font=font)
+    draw.text((x,y-(bounds[1]+bounds[3])/2),text,font=font,fill=fill)
+
+
 @raster_cache
 def render_panel(scale,title,rows,focus=None,footer='',width=298):
     ss=scale*3;p=lambda v:round(v*ss)
     normalized=[(row[0],row[1],row[2],row[3] if len(row)>3 else None) for row in rows]
     topic_cards=bool(normalized) and all(action and action[0]=='thread' for _,detail,action,_ in normalized)
     row_height=34 if normalized and all(not detail for _,detail,_,_ in normalized) else 39
-    if topic_cards:row_height=42 if any(detail for _,detail,_,_ in normalized) else 34
+    if topic_cards:row_height=TOPIC_ROW_HEIGHT
     row_start=36 if title else 12 if topic_cards else 10
     # The frame starts at (7, 6), rows at x=13, and the final row ends
     # two DIP before its pitch. Keep the same six-DIP inset on every side.
@@ -28,8 +50,9 @@ def render_panel(scale,title,rows,focus=None,footer='',width=298):
     im=Image.new('RGBA',(p(width),p(height)));shadow=Image.new('RGBA',im.size)
     ImageDraw.Draw(shadow).rounded_rectangle((p(7),p(9),p(width-7),p(height-5)),radius=p(10),fill=(0,0,0,25))
     im.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(p(3))));d=ImageDraw.Draw(im)
-    d.rounded_rectangle((p(7),p(6),p(width-7),p(height-8)),radius=p(10),fill=(252,251,250,249),outline='#dcdbd9',width=max(1,p(.6)))
+    d.rounded_rectangle((p(7),p(6),p(width-7),p(height-8)),radius=p(10),fill=(252,251,250,255 if topic_cards else 249),outline='#dcdbd9',width=max(1,p(.6)))
     regular=ui_font('C:/Windows/Fonts/msyh.ttc',p(10));small=ui_font('C:/Windows/Fonts/msyh.ttc',p(8));bold=ui_font('C:/Windows/Fonts/msyhbd.ttc',p(11))
+    topic_font=ui_font('C:/Windows/Fonts/msyhbd.ttc',p(11)) if topic_cards else regular
     if title:d.text((p(18),p(15)),title,font=bold,fill='#292927')
     actions=[]
     for i,(label,detail,action,status) in enumerate(normalized):
@@ -38,12 +61,51 @@ def render_panel(scale,title,rows,focus=None,footer='',width=298):
         row_bottom=y+row_height-2
         focused=bool(action) and len(actions)==focus
         if topic_cards:
-            if focused:d.rounded_rectangle((p(13),p(row_top),p(width-13),p(row_bottom)),radius=p(6),fill='#eff3ef')
+            if focused:d.rounded_rectangle((p(13),p(row_top),p(width-13),p(row_bottom)),radius=p(6),fill='#eeedeb')
             if i<len(normalized)-1:d.line((p(20),p(y+row_height-1),p(width-20),p(y+row_height-1)),fill='#ebeae7',width=max(1,p(.4)))
         if action:
             index=len(actions)
             actions.append(((13,row_top,width-13,row_bottom),action))
             if index==focus and not topic_cards:d.rounded_rectangle((p(13),p(y),p(width-13),p(row_bottom)),radius=p(6),fill='#eeedeb')
+        if topic_cards:
+            center=p((row_top+row_bottom)/2)
+            dot_color={'running':'#4c9d72','completed':'#0070d2'}.get(status)
+            label_x=32 if dot_color else 20
+            if dot_color:
+                d.ellipse((p(20),center-p(2.5),p(25),center+p(2.5)),fill=dot_color)
+            # State remains in row metadata; the compact pill shows only the
+            # conversation's own provider/model, with no repeated second line.
+            model=detail.split(' · ',1)[-1] if detail else ''
+            text_right=width-36
+            if model:
+                max_pill=max(24,min(134,width-label_x-72-10-36))
+                model_width=p(max_pill-12)
+                source,separator,name=model.partition('/')
+                if separator and d.textlength(model,font=small)>model_width:
+                    prefix=source+'/'
+                    model=prefix+_fit_line(d,name,small,max(0,model_width-d.textlength(prefix,font=small)))
+                    model=_fit_line(d,model,small,model_width)
+                else:model=_fit_line(d,model,small,model_width)
+                pill_width=d.textlength(model,font=small)+p(12)
+                pill_right=p(width-36);pill_left=pill_right-pill_width
+                # Elevation belongs to this cached pill, not a new window,
+                # timer or animation. Keep the hit area and text stationary.
+                pad=p(3)
+                pill_shadow=Image.new('RGBA',(round(pill_width)+2*pad+1,p(18)+2*pad+1))
+                ImageDraw.Draw(pill_shadow).rounded_rectangle(
+                    (pad,pad+p(.7),pad+pill_width,pad+p(18)+p(.7)),
+                    radius=p(6),fill=(49,45,38,22 if focused else 15))
+                im.alpha_composite(pill_shadow.filter(ImageFilter.GaussianBlur(p(.7))),
+                                   (round(pill_left)-pad,round(center)-p(9)-pad))
+                d.rounded_rectangle((pill_left,center-p(9),pill_right,center+p(9)),
+                                    radius=p(6),fill='#fdfcfb',
+                                    outline='#d9d6d0' if focused else '#e4e1db',width=max(1,p(.45)))
+                _center_line(d,pill_left+p(6),center,model,small,'#716e68')
+                text_right=pill_left/ss-10
+            text=_fit_line(d,label,topic_font,p(max(0,text_right-label_x)))
+            _center_line(d,p(label_x),center,text,topic_font,'#292927')
+            if action:_center_line(d,p(width-25),center,'›',regular,'#686863' if focused else '#85847f')
+            continue
         text=label
         dot_color={'running':'#4c9d72','completed':'#0070d2'}.get(status)
         max_text_width=width-60 if dot_color else width-54

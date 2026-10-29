@@ -202,6 +202,8 @@ class Badge:
             restored, restored_error = self.restore_last_quota()
         self.data, self.error, self.busy = restored, restored_error, False
         self.refresh_failures = 0
+        self.last_quota_error = None
+        self.last_quota_failure_at = None
         self.results = queue.Queue()
         self.next_refresh = 0
         self.scale, self.geometry = 1, None
@@ -364,15 +366,30 @@ class Badge:
         def worker():
             try:
                 self.results.put((fetch_quota(), False))
-            except Exception:
-                self.results.put((None, True))
+            except Exception as exc:
+                # Keep only the error class, never CLI output or credentials.
+                self.results.put((None, type(exc).__name__))
             self.win.u.PostMessageW(self.controller, 0x8001, 0, 0)
         try:threading.Thread(target=worker, daemon=True).start()
-        except Exception:
-            self.busy=False;self.next_refresh=time.time()+5
-            self.refresh_failures=getattr(self,'refresh_failures',0)+1
-            self.error=self.refresh_failures>=2 or not self.data
+        except Exception as exc:
+            self.busy=False
+            self.quota_refresh_failed(type(exc).__name__)
             self.log_error()
+
+    def quota_refresh_failed(self, reason):
+        self.refresh_failures=getattr(self,'refresh_failures',0)+1
+        self.error=self.refresh_failures>=2 or not self.data
+        self.last_quota_error=reason if isinstance(reason,str) and reason.isidentifier() else 'QuotaReadFailed'
+        self.last_quota_failure_at=time.time()
+        # Reuse the existing heartbeat: brief failures recover quickly while
+        # persistent outages back off to the normal five-minute cadence.
+        delay=min(REFRESH_SECONDS,5*2**min(self.refresh_failures-1,6))
+        self.next_refresh=self.last_quota_failure_at+delay
+
+    def accept_quota(self, data):
+        self.data=data;self.error=False;self.refresh_failures=0
+        self.last_quota_error=None;self.last_quota_failure_at=None
+        self.next_refresh=time.time()+REFRESH_SECONDS
 
     def update_visual(self):
         state = (self.valid(), self.data.get('remaining') if self.data else None, self.bg, self.scale)
@@ -559,6 +576,9 @@ class Badge:
                   'visible':bool(valid_window and self.win.u.IsWindowVisible(self.hwnd) and not self.win.u.IsIconic(self.target)),
                   'geometry':self.geometry,'screenRect':[r.left,r.top,r.right,r.bottom],
                   'quota':self.data,'readError':self.error,'layoutEvents':self.layout_events,
+                  'quotaReadError':getattr(self,'last_quota_error',None),
+                  'quotaReadFailures':getattr(self,'refresh_failures',0),
+                  'quotaLastFailureAt':getattr(self,'last_quota_failure_at',None),
                   'background':'transparent' if getattr(self,'per_pixel_alpha',False) else f'#{self.bg&255:02x}{self.bg>>8&255:02x}{self.bg>>16&255:02x}',
                   'refreshSeconds':REFRESH_SECONDS,'tooltip':self.tooltip,'hoverTracking':'explicit',
                   'tooltipVisible':bool(self.tooltip and self.win.u.IsWindowVisible(self.tooltip)),
@@ -596,16 +616,12 @@ class Badge:
             if msg == 0x8001:
                 data,error = self.results.get_nowait()
                 if data:
-                    self.data = data
-                    self.error = False
-                    self.refresh_failures = 0
+                    self.accept_quota(data)
                 else:
-                    self.refresh_failures += 1
                     # Keep the last valid value through one transient CLI or
                     # process-start failure. A quick retry distinguishes a
                     # momentary wake-up race from a real unavailable source.
-                    self.error = self.refresh_failures >= 2 or not self.data
-                    if not self.error:self.next_refresh=time.time()+5
+                    self.quota_refresh_failed(error)
                 self.busy = False
                 self.update_visual()
                 self.write_status()

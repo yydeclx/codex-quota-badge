@@ -33,7 +33,7 @@ try {
  $config=@{version=1;refreshSeconds=60;realtimeMetricsEnabled=$false;activityEnabled=$true;items=@(@{id='chatgpt_today';type='opencodex_today';provider='openai';label='ChatGPT';enabled=$true;gapAfter=3},@{id='weekly_quota';type='weekly_quota';label='周额度';enabled=$true;gapAfter=0});services=@();shortcuts=@()}
  $config|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $stage 'sidebar-config.json') -Encoding utf8NoBOM
  @{version=$Version;programFiles=$files;directories=@('.codex-plugin','skills');preservedFiles=@('sidebar-config.json','window-mode.json','update-config.json','quota-history.json','quota-alert-state.json','connection-history.json','reset-signals.json','status.json','sidebar-status.json','update-status.json')}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $stage 'package-manifest.json') -Encoding utf8NoBOM
- foreach($module in @('test_update_client','test_reset_signals','test_quota_windows','test_quota_accounting','test_sidebar_activity','test_modules','test_provider_indicators','test_sidebar_data','test_power_mode','test_stability','test_maintenance','test_supervisor','test_popup_compat','test_window_mode','test_windows_update','test_popup_native','test_diagnostics','test_patch_mode')){
+ foreach($module in @('test_update_client','test_reset_signals','test_quota_windows','test_quota_accounting','test_sidebar_activity','test_modules','test_provider_indicators','test_sidebar_data','test_power_mode','test_stability','test_maintenance','test_supervisor','test_popup_compat','test_topic_panel','test_quota_recovery','test_window_mode','test_windows_update','test_popup_native','test_diagnostics','test_patch_mode')){
   & python -m unittest $module -q
   if($LASTEXITCODE -ne 0){throw "专项测试失败：$module"}
  }

@@ -540,10 +540,10 @@ class SidebarPlugin(Badge):
                     if any(provider_indicators(item['provider'],sample)):
                         links.append(topic_row(task,'completed' if kind=='tasks_done' else 'running'))
             if links:
-                from hover_panel import render_panel
+                from hover_panel import render_panel,TOPIC_PANEL_WIDTH
                 from PIL import Image
                 focus=getattr(self,'hover_focus',None);base=7 if telemetry['trend'] else 0
-                panel,actions=render_panel(self.scale,'',links[:3],focus-base if focus is not None and focus>=base else None,width=self.tooltip_surface.width/self.scale)
+                panel,actions=render_panel(self.scale,'',links[:3],focus-base if focus is not None and focus>=base else None,width=TOPIC_PANEL_WIDTH)
                 top_y=self.tooltip_surface.height
                 panel_y=max(0,top_y-round(4*self.scale))
                 combined=Image.new('RGBA',(max(panel.width,self.tooltip_surface.width),panel_y+panel.height))
@@ -842,7 +842,7 @@ class SidebarPlugin(Badge):
                 quota,usage,active,settlement,error=self.boundary_results.get_nowait();self.boundary_busy=False
                 if not error:
                     before=self.quota_history.view().get('lastRemaining') if self.quota_history.view() else None
-                    self.data,self.error=quota,False;self.usage,self.usage_error=usage,None
+                    self.accept_quota(quota);self.usage,self.usage_error=usage,None
                     local=item_usage(usage,'openai',max_age=max(180,3*self.config['refreshSeconds']))
                     if local is not None:local={**local,'date':usage.get('date'),'updatedAt':usage.get('updatedAt')}
                     self.quota_history.observe(quota,local,active,True,settlement);self.last_complete_sample=time.monotonic()
