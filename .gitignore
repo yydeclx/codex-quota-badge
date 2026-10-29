@@ -10,6 +10,7 @@ status.json
 *-history*.json
 *-state.json
 update-config.json
+window-mode.json
 release-manifest.json
 SHA256SUMS-*.txt
 gateway-telemetry/build/

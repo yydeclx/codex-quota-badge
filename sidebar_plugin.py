@@ -99,14 +99,20 @@ class SidebarPlugin(Badge):
             return
         self.scale=(self.win.u.GetDpiForWindow(self.target) or 96)/96
         s=self.scale
-        height=round((self.row_top(len(self.items)-1)+self.item_height(self.items[-1]))*s)
-        x=round((6+self.config.get('horizontalOffset',0))*s)-round(self.hover_gutter*s)
-        geometry=(x,max(0,rect.bottom-round(self.config['bottomOffset']*s)-height),round((34+2*self.hover_gutter)*s),height)
+        geometry=self.client_geometry(rect,s)
         if geometry != self.geometry or not self.win.u.IsWindowVisible(self.hwnd):
-            self.win.u.SetWindowPos(self.hwnd,W.HWND(0),*geometry,0x10|0x40)
+            if not self.win.u.SetWindowPos(self.hwnd,W.HWND(0),*geometry,0x10|0x40):
+                return
             self.geometry=geometry
             self.layout_events+=1
             self.request_repaint()
+
+    def client_geometry(self,rect,scale):
+        """One DIP layout contract for child and owned-popup window surfaces."""
+        height=round((self.row_top(len(self.items)-1)+self.item_height(self.items[-1]))*scale)
+        x=round((6+self.config.get('horizontalOffset',0))*scale)-round(self.hover_gutter*scale)
+        return (x,max(0,rect.bottom-round(self.config['bottomOffset']*scale)-height),
+                round((34+2*self.hover_gutter)*scale),height)
 
     def request_repaint(self,rect=None):
         """Coalesce content changes; ULW surfaces do not rely on WM_PAINT.

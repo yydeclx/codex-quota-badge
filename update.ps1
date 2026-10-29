@@ -34,7 +34,7 @@ $python = $pythonCommand.Source
 # 只部署程序和随包文档。运行数据、配置、状态、日志以及任何账号资料均不在清单中。
 $programFiles = @(
     'version.py', 'quota_badge.py', 'quota_styles.py', 'native_badge.py',
-    'sidebar_plugin.py', 'sidebar_activity.py', 'sidebar_context.py',
+    'sidebar_plugin.py', 'sidebar_compat.py', 'window_mode.py', 'sidebar_activity.py', 'sidebar_context.py',
     'font_fallback.py', 'quota_accounting.py', 'patch_mode.py',
     'sidebar_data.py', 'sidebar_details.py', 'sidebar_manager.py',
     'sidebar_modules.py', 'sidebar_options.py', 'sidebar_startup.py',
@@ -68,11 +68,14 @@ foreach ($relativePath in $programDirectories) {
 
 $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-quota-update-" + [guid]::NewGuid().ToString('N'))
 $stageRoot = Join-Path $workRoot 'stage'
-$backupRoot = Join-Path $targetRoot ('.update-backups\' + (Get-Date -Format 'yyyyMMdd-HHmmssfff'))
+$backupRoot = Join-Path $targetRoot ('.update-backups\' + [guid]::NewGuid().ToString('N'))
 $deployedFiles = [System.Collections.Generic.List[string]]::new()
 $wasRunning = $false
 $filesChanged = $false
 $oldPid = $null
+$oldSupervisor = $null
+$modeFile = Join-Path $targetRoot 'window-mode.json'
+$modeFileCreated = $false
 
 function Copy-RelativeFile {
     param([string]$FromRoot, [string]$ToRoot, [string]$RelativePath)
@@ -84,8 +87,23 @@ function Copy-RelativeFile {
 }
 
 function Start-Sidebar {
-    & (Join-Path $targetRoot 'start.ps1')
+    # Isolate exit/exit-code handling from the updater's own PowerShell session.
+    & (Join-Path $PSHOME 'pwsh.exe') -NoProfile -File (Join-Path $targetRoot 'start.ps1')
     if ($LASTEXITCODE -ne 0) { throw '侧栏启动脚本返回失败。' }
+}
+
+function Wait-OldSidebar {
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Process -Id $oldPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+    }
+    if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
+        throw '侧栏在 15 秒内未停止，更新已取消。'
+    }
+    # The child can exit before its supervisor releases the singleton mutex.
+    if ($null -ne $oldSupervisor -and -not $oldSupervisor.WaitForExit(15000)) {
+        throw '旧版 supervisor 在 15 秒内未退出，更新已取消。'
+    }
 }
 
 try {
@@ -113,15 +131,21 @@ try {
 
     if ($wasRunning) {
         $oldPid = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).pid
+        # Only wait for the observed parent running this installation's supervisor.
+        $childProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $oldPid"
+        if ($null -ne $childProcess) {
+            $parentProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($childProcess.ParentProcessId)"
+            $supervisorPath = [regex]::Escape((Join-Path $targetRoot 'sidebar_supervisor.py'))
+            if ($null -ne $parentProcess -and $parentProcess.Name -in @('python.exe', 'pythonw.exe') -and
+                $parentProcess.CommandLine -match ('(?:^|[\s"])' + $supervisorPath + '(?:"|\s|$)')) {
+                $oldSupervisor = Get-Process -Id $parentProcess.ProcessId -ErrorAction SilentlyContinue
+                # Cache a handle while the parent is alive, avoiding later PID reuse.
+                if ($null -ne $oldSupervisor) { $null = $oldSupervisor.Handle }
+            }
+        }
         & $python (Join-Path $targetRoot 'manage.py') stop | Out-Host
         if ($LASTEXITCODE -ne 0) { throw '无法请求侧栏停止，更新已取消。' }
-        $deadline = (Get-Date).AddSeconds(15)
-        while ((Get-Process -Id $oldPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
-            Start-Sleep -Milliseconds 250
-        }
-        if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
-            throw '侧栏在 15 秒内未停止，更新已取消。'
-        }
+        Wait-OldSidebar
     }
 
     $stageFiles = @(Get-ChildItem -LiteralPath $stageRoot -File -Recurse)
@@ -131,12 +155,26 @@ try {
         if (Test-Path -LiteralPath $destination -PathType Leaf) {
             Copy-RelativeFile -FromRoot $targetRoot -ToRoot $backupRoot -RelativePath $relativePath
         }
-        $deployedFiles.Add($relativePath)
     }
+
+    # Run the NEW helper against OLD code, before replacing the legacy CHILD assignment.
+    # window-mode.json is persistent user state: never stage, back up, or deploy it.
+    # Register cleanup BEFORE invoking the helper: it can fail after creating the
+    # file (e.g. fsync/stdout failure). A pre-existing file is never ours to remove.
+    $modeFileCreated = -not (Test-Path -LiteralPath $modeFile)
+    $migrationOutput = & $python (Join-Path $stageRoot 'window_mode.py') --migrate $targetRoot
+    if ($LASTEXITCODE -ne 0) { throw '窗口兼容模式迁移失败，目标程序未修改。' }
+    $migration = $migrationOutput -join "`n" | ConvertFrom-Json
+    if ($migration.created -isnot [bool] -or $migration.mode -notin @('owned-popup', 'child')) {
+        throw '窗口兼容模式迁移返回了无效结果。'
+    }
+    $modeFileCreated = $modeFileCreated -and $migration.created
 
     # 从首次替换前开始启用回滚；这样部署中途失败也会恢复已处理文件。
     $filesChanged = $true
-    foreach ($relativePath in $deployedFiles) {
+    foreach ($file in $stageFiles) {
+        $relativePath = [System.IO.Path]::GetRelativePath($stageRoot, $file.FullName)
+        $deployedFiles.Add($relativePath)
         Copy-RelativeFile -FromRoot $stageRoot -ToRoot $targetRoot -RelativePath $relativePath
     }
 
@@ -150,26 +188,42 @@ try {
 }
 catch {
     $originalError = $_
+    $rollbackFailed = $false
     if ($filesChanged) {
         Write-Warning '更新失败，正在恢复更新前的程序文件……'
         foreach ($relativePath in $deployedFiles) {
-            $destination = Join-Path $targetRoot $relativePath
-            if (Test-Path -LiteralPath $destination -PathType Leaf) {
-                Remove-Item -LiteralPath $destination -Force
-            }
-            $backupFile = Join-Path $backupRoot $relativePath
-            if (Test-Path -LiteralPath $backupFile -PathType Leaf) {
-                Copy-RelativeFile -FromRoot $backupRoot -ToRoot $targetRoot -RelativePath $relativePath
+            try {
+                $destination = Join-Path $targetRoot $relativePath
+                if (Test-Path -LiteralPath $destination -PathType Leaf) {
+                    Remove-Item -LiteralPath $destination -Force
+                }
+                $backupFile = Join-Path $backupRoot $relativePath
+                if (Test-Path -LiteralPath $backupFile -PathType Leaf) {
+                    Copy-RelativeFile -FromRoot $backupRoot -ToRoot $targetRoot -RelativePath $relativePath
+                }
+            } catch {
+                $rollbackFailed = $true
+                Write-Warning "程序文件恢复失败（$relativePath）：$($_.Exception.Message)"
             }
         }
-        if ($wasRunning) {
-            try { Start-Sidebar } catch { Write-Warning "旧版程序已恢复，但侧栏重启失败：$($_.Exception.Message)" }
+    }
+    if ($modeFileCreated -and (Test-Path -LiteralPath $modeFile)) {
+        try { Remove-Item -LiteralPath $modeFile -Force } catch {
+            $rollbackFailed = $true
+            Write-Warning "本次新建的窗口模式文件移除失败：$($_.Exception.Message)"
         }
-    } elseif ($wasRunning -and $null -ne $oldPid -and -not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-        try { Start-Sidebar } catch { Write-Warning "更新未写入，但侧栏恢复启动失败：$($_.Exception.Message)" }
+    }
+    if (-not $rollbackFailed -and $wasRunning -and $null -ne $oldPid -and
+        -not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
+        try { Wait-OldSidebar; Start-Sidebar } catch { Write-Warning "旧版侧栏恢复启动失败：$($_.Exception.Message)" }
     }
     throw $originalError
 }
 finally {
+    if ($null -ne $oldSupervisor) { $oldSupervisor.Dispose() }
+    $resolvedWorkRoot = [System.IO.Path]::GetFullPath($workRoot)
+    if (-not $resolvedWorkRoot.StartsWith([System.IO.Path]::GetTempPath(), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw '拒绝清理临时目录之外的路径。'
+    }
     if (Test-Path -LiteralPath $workRoot) { Remove-Item -LiteralPath $workRoot -Recurse -Force }
 }

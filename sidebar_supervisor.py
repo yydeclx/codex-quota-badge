@@ -125,8 +125,9 @@ def owned_process(command, *, popen=None, track_tree=True, **kwargs):
 
 
 def child_command() -> list[str]:
+    from window_mode import child_entry
     pythonw = Path(sys.executable).with_name("pythonw.exe")
-    return [str(pythonw), str(CHILD)]
+    return [str(pythonw), str(child_entry(ROOT))]
 
 
 def is_abnormal_exit(returncode: int | None) -> bool:

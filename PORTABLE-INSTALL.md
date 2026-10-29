@@ -1,8 +1,8 @@
 # Codex 侧栏指标 Windows 可移植包
 
-当前版本：1.5.0
+当前版本：1.5.1
 
-普通安装包为 `codex-quota-badge-1.5.0.zip`，不包含个人配置、历史或网关二进制。新安装默认关闭实时指标补丁；已有安装更新时保留原设置与已有补丁文件
+普通安装包为 `codex-quota-badge-1.5.1.zip`，不包含个人配置、历史或网关二进制。新安装默认关闭实时指标补丁；已有安装更新时保留原设置与已有补丁文件
 
 可选附件 `opencodex-telemetry-2.92.0-1.5.0.zip` 仅用于 Windows x64 的 OpenCodex 2.92.0。先安装普通包，再将附件解压到同一目录（形成 `gateway-telemetry/build/ocx.exe` 等文件），随后在管理页显式开启实时指标补丁。开关会校验版本和哈希，可能重启网关；忙碌或版本不符时拒绝切换。不要覆盖其他版本的 OpenCodex。更新侧栏本身不会自动应用此附件，官方 OpenCodex 更新后需重新适配
 
@@ -22,6 +22,22 @@
 - 停止侧栏：python .\manage.py stop
 - 查看状态：python .\manage.py status
 
+## Windows 窗口兼容模式
+
+默认使用透明子窗口，不会强制所有电脑使用 popup。仅当原始子窗口在该电脑不可见时，在安装目录用 PowerShell 7 执行：
+
+```powershell
+python .\manage.py stop
+python .\window_mode.py --set owned-popup
+.\start.ps1
+```
+
+切回默认方式时，将第二条命令改为 `python .\window_mode.py --set child`。模式选择保存到本机 `window-mode.json`，不修改 `sidebar-config.json`，也不涉及账号和网关重启。`python .\window_mode.py` 可查看保存的选择；`python .\manage.py status` 的 `mode` 可核对实际运行方式。
+
+新版监督器按选择启动 `sidebar_compat.py` 或 `sidebar_plugin.py`。兼容模式仍使用 Codex 作为 owner，跟随宿主位置和显示状态，不使用全局置顶，不增加计时器或轮询。两种模式均支持管理页的水平偏移、动态模块间距和相同的图标样式。
+
+从本地修改过的旧版本升级时，使用下方 `update.ps1`：它在覆盖程序前只读解析旧监督器的静态 `CHILD` 选择；确认指向 `sidebar_compat.py` 且本机尚无模式文件时，才迁移为 popup。已有显式选择优先，普通安装保持默认子窗口。不要直接解压覆盖旧目录，否则无法在覆盖后识别旧入口；对特殊自定义启动脚本，请升级前显式选择模式。
+
 ## 安全更新
 
 1. 将新版压缩包解压到一个临时目录，不要覆盖当前安装目录。
@@ -30,7 +46,7 @@
 
 更新脚本会先在临时目录执行 `py_compile`，再停止当前侧栏、备份将被替换的程序文件、部署新版并再次执行编译检查，最后重启侧栏。更新中途失败时会恢复备份；若更新前侧栏正在运行，也会尝试恢复运行。备份保存在原安装目录的 `.update-backups` 文件夹中。
 
-更新不会覆盖 `sidebar-config.json`、`quota-history.json`、`quota-alert-state.json`、`connection-history.json`，也不会覆盖原安装目录中的状态文件和日志。更新清单不复制账号、Token、Cookie、OpenCodex/Codex 凭据或其他运行数据。
+更新不会覆盖 `window-mode.json`、`sidebar-config.json`、`quota-history.json`、`quota-alert-state.json`、`connection-history.json`，也不会覆盖原安装目录中的状态文件和日志。更新清单不复制账号、Token、Cookie、OpenCodex/Codex 凭据或其他运行数据。
 
 请勿把 `update.ps1` 放在原安装目录中直接对自身执行；新版解压目录和目标安装目录必须是两个不同目录。
 

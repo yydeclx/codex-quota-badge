@@ -1,6 +1,6 @@
 {
   "name": "codex-quota-badge",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "可配置的原生侧栏伴随工具：今日 ChatGPT/SKG Token 与周额度",
   "author": {
     "name": "Local developer"

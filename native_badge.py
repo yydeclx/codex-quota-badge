@@ -183,6 +183,7 @@ class Win:
 
 
 class Badge:
+    owned_popup = False
     def __init__(self, test_host=None):
         self.win = Win()
         self.test_host = test_host
@@ -271,8 +272,10 @@ class Badge:
         context = self.win.u.GetWindowDpiAwarenessContext(target)
         old_context = self.win.u.SetThreadDpiAwarenessContext(context)
         try:
-            self.hwnd = self.win.u.CreateWindowExW(0x08000000 | 4 | 0x80000, 'CodexQuotaNativeV2',
-                'Codex Weekly Quota Badge', 0x40000000 | 0x04000000,
+            extended = 0x08000000 | 0x80000 | (0x80 if self.owned_popup else 4)
+            style = (0x80000000 if self.owned_popup else 0x40000000) | 0x04000000
+            self.hwnd = self.win.u.CreateWindowExW(extended, 'CodexQuotaNativeV2',
+                'Codex Weekly Quota Badge', style,
                 0, 0, 1, 1, target, None, self.win.instance, None)
         finally:
             self.win.u.SetThreadDpiAwarenessContext(old_context)
@@ -483,7 +486,7 @@ class Badge:
             if self.win.u.GetCursorPos(C.byref(cursor)) and self.win.u.GetWindowRect(self.hwnd,C.byref(bounds)):
                 inside = bounds.left <= cursor.x < bounds.right and bounds.top <= cursor.y < bounds.bottom
                 if inside:
-                    inside = self.win.u.GetAncestor(self.win.u.WindowFromPoint(cursor),2) == self.target
+                    inside = self.win.u.GetAncestor(self.win.u.WindowFromPoint(cursor),2) in (self.target,self.hwnd)
         self.track_hover(inside)
 
     def position_tooltip(self):
@@ -549,7 +552,7 @@ class Badge:
         r = W.RECT()
         if valid_window:
             self.win.u.GetWindowRect(self.hwnd,C.byref(r))
-        status = {'mode':'native-child','pid':os.getpid(),'hwnd':self.hwnd,'target':self.target,
+        status = {'mode':'owned-popup' if self.owned_popup else 'native-child','pid':os.getpid(),'hwnd':self.hwnd,'target':self.target,
                   'actualParent':self.win.u.GetParent(self.hwnd) if valid_window else None,
                   'childStyle':bool(self.win.u.GetWindowLongPtrW(self.hwnd,-16)&0x40000000) if valid_window else False,
                   'topmost':bool(self.win.u.GetWindowLongPtrW(self.hwnd,-20)&8) if valid_window else False,

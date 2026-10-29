@@ -7,6 +7,8 @@
     "patch_mode.py",
     "native_badge.py",
     "sidebar_plugin.py",
+    "sidebar_compat.py",
+    "window_mode.py",
     "sidebar_activity.py",
     "sidebar_context.py",
     "font_fallback.py",
@@ -54,6 +56,7 @@
   ],
   "preservedFiles": [
     "sidebar-config.json",
+    "window-mode.json",
     "update-config.json",
     "quota-history.json",
     "quota-alert-state.json",
@@ -63,7 +66,7 @@
     "sidebar-status.json",
     "update-status.json"
   ],
-  "version": "1.5.0",
+  "version": "1.5.1",
   "directories": [
     ".codex-plugin",
     "skills"

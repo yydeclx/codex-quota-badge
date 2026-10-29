@@ -8,7 +8,13 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.5.0](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.0)**
+> 当前最新版本：**[v1.5.1](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.1)**
+
+## v1.5.1 更新
+
+正式支持 Windows owned popup 兼容模式，修复水平偏移不生效、Token 右边框裁切和悬停信息卡无法打开。普通电脑仍默认使用透明子窗口；兼容电脑的模式选择保存在独立的 `window-mode.json`，安全更新会迁移旧监督器里的兼容入口并保留配置与历史。
+
+仅在原始透明子窗口不可见的电脑上选择兼容模式，详见 [安装与更新说明](PORTABLE-INSTALL.md#windows-窗口兼容模式)。本版不更改 Token 和周额度样式，不包含新的网关二进制；已有可选补丁文件保留。
 
 ## v1.5.0 更新
 
