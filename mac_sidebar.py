@@ -1,6 +1,7 @@
 """Cross-platform macOS sidebar companion using Tk and shared OpenCodex data."""
 import json, subprocess, threading, time, tkinter as tk
 from pathlib import Path
+from mac_lifecycle import instance_guard
 from sidebar_data import ROOT, CONFIG, load_config, fetch_usage, compact_tokens, sync_provider_items
 
 BG='#f3f2f0'; INK='#4c4b49'; MUTED='#888783'; BORDER='#aaa9a6'
@@ -43,4 +44,6 @@ class MacSidebar:
         if not self.busy:self.refresh()
         self.root.after(60000,self.tick)
     def close(self):self.root.destroy()
-if __name__=='__main__':MacSidebar().root.mainloop()
+if __name__=='__main__':
+    with instance_guard(Path(__file__).resolve().parent):
+        MacSidebar().root.mainloop()

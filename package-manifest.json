@@ -26,6 +26,7 @@
     "update_client.py",
     "update_prompt.py",
     "mac_sidebar.py",
+    "mac_lifecycle.py",
     "start-mac.sh",
     "install-mac.sh",
     "update-mac.sh",
