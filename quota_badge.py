@@ -77,19 +77,17 @@ def _bounded_percent(value):
     return max(0,min(100,100-float(value)))
 
 def weekly_quota_from_opencodex_report(report):
-    """Parse OpenCodex 2.92+ provider quota output.
-
-    This is the same provider quota observation used by the native client UI:
-    weeklyPercent is used percent, and weeklyResetAt is the weekly reset time.
-    The Pro window has no five-hour bucket in this report, so it stays absent.
-    """
+    """Read old/new report layouts without mixing account and pool windows."""
     if not isinstance(report,dict) or not isinstance(report.get('reports'),list):
         raise ValueError('OpenCodex quota report unavailable')
     row=next((item for item in report['reports'] if isinstance(item,dict) and item.get('provider')=='openai'),None)
     quota=(row or {}).get('quota') or {}
     if not isinstance(quota, dict):
         raise ValueError('Invalid OpenCodex quota data')
-    aggregation=quota.get('aggregation') or {}
+    # Current CLI reports put metadata beside quota; older reports nested it.
+    aggregation=(row or {}).get('aggregation')
+    if aggregation is None:aggregation=quota.get('aggregation')
+    if aggregation is None:aggregation={}
     if not isinstance(aggregation, dict):
         raise ValueError('Invalid OpenCodex aggregation data')
     current=aggregation.get('currentAccount') or {}
@@ -99,15 +97,33 @@ def weekly_quota_from_opencodex_report(report):
     current_quota=current.get('quota') or {}
     if not isinstance(current_quota, dict):
         raise ValueError('Invalid OpenCodex account quota')
-    used=quota.get('weeklyPercent',current_quota.get('weeklyPercent'))
-    reset= current_quota.get('weeklyResetAt', weekly.get('nextRecoveryAt'))
-    if not isinstance(reset,(int,float)) or not math.isfinite(reset):raise ValueError('Invalid weekly quota reset')
-    if reset>10**12:reset/=1000
-    if not isinstance(used,(int,float)) or not math.isfinite(used):raise ValueError('Invalid weekly quota percent')
-    plan=current.get('plan')
-    return {'remaining':_bounded_percent(used),'resetsAt':reset,'fiveHour':None,
-            'planType':plan,'updatedAt':(row or {}).get('updatedAt')/1000 if isinstance((row or {}).get('updatedAt'),(int,float)) else time.time(),
-            'quotaSource':'opencodex provider quota'}
+    def stamp(value):
+        if type(value) not in (int,float) or not math.isfinite(value) or value<=0:return None
+        return value/1000 if value>10**12 else value
+    def window(source,percent_key,reset_key):
+        used=source.get(percent_key);reset=stamp(source.get(reset_key))
+        if type(used) not in (int,float) or not math.isfinite(used) or not 0<=used<=100 or reset is None:return None
+        return {'remaining':_bounded_percent(used),'resetsAt':reset}
+
+    # A pool percentage and one account's reset describe different populations.
+    # Prefer one complete current-account observation, otherwise a complete pool.
+    selected=current_quota
+    result=window(selected,'weeklyPercent','weeklyResetAt')
+    scope='current-account';plan=current.get('plan')
+    if result is None:
+        selected=quota;result=window(selected,'weeklyPercent','weeklyResetAt')
+        scope='provider';plan=None
+    if result is None:
+        selected=weekly;result=window(selected,'usedPercent','nextRecoveryAt')
+        scope='account-pool';plan=None
+    if result is None:raise ValueError('Complete weekly quota window unavailable')
+    if scope=='account-pool':
+        five=aggregation.get('fiveHour')
+        five_hour=window(five,'usedPercent','nextRecoveryAt') if isinstance(five,dict) else None
+    else:five_hour=window(selected,'fiveHourPercent','fiveHourResetAt')
+    updated=stamp(selected.get('updatedAt')) or stamp((row or {}).get('updatedAt')) or stamp(quota.get('updatedAt')) or time.time()
+    return {**result,'fiveHour':five_hour,'planType':plan,'updatedAt':updated,
+            'quotaSource':'opencodex provider quota','quotaScope':scope}
 
 
 def weekly_quota(result):

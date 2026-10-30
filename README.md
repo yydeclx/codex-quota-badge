@@ -8,7 +8,13 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.5.3](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.3)**
+> 当前最新版本：**[v1.5.4](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.4)**
+
+## v1.5.4 更新
+
+- 修复 OpenCodex CLI 将 aggregation 放在 quota 同级时周额度变成横杠的问题，兼容旧格式
+- 当前账号与账号池分别使用成对的额度、重置和时间戳，避免混合口径；当前账号无 5 小时窗口时保持缺省
+- 重置监测断网后复用现有心跳进行有上限退避重试，成功恢复正常 15 分钟周期，失败保留缓存
 
 ## v1.5.3 更新
 

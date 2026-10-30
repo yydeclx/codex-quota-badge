@@ -701,16 +701,25 @@ class SidebarPlugin(Badge):
         except Exception:self.boundary_busy=False
 
     def refresh_reset_signals(self):
-        if not self.reset_signals.due():return
-        self.reset_signals.busy=True;self.reset_signals.nextPoll=time.time()+15*60
+        # The existing heartbeat also consumes a result if its wake-up was lost.
+        self.apply_reset_signal_result()
+        if not self.reset_signals.begin_refresh():return
         def worker():
-            try:
-                from reset_signals import fetch
-                self.reset_signal_results.put((fetch(),None))
-            except Exception as exc:self.reset_signal_results.put((None,type(exc).__name__))
-            self.win.u.PostMessageW(self.controller,0x800A,0,0)
+            try:data=self.reset_signals.fetcher();error=None
+            except Exception as exc:data=None;error=type(exc).__name__
+            self.reset_signal_results.put((data,error))
+            try:self.win.u.PostMessageW(self.controller,0x800A,0,0)
+            except Exception:pass  # The heartbeat will consume the queued result.
         try:threading.Thread(target=worker,daemon=True).start()
-        except Exception:self.reset_signals.busy=False
+        except Exception as exc:self.reset_signals.finish_refresh(error=type(exc).__name__)
+
+    def apply_reset_signal_result(self):
+        try:data,error=self.reset_signal_results.get_nowait()
+        except queue.Empty:return
+        if self.reset_signals.finish_refresh(data,error):
+            try:
+                self.last_tooltip_text=None;self.request_repaint();self.update_tooltip();self.publish_details()
+            except Exception:self.log_error()
 
     def check_for_update(self):
         if not hasattr(self,'update_results') or not hasattr(self,'win'):return
@@ -816,17 +825,7 @@ class SidebarPlugin(Badge):
 
     def window_proc(self,hwnd,msg,wp,lp):
         if msg==0x800A:
-            try:
-                data,error=self.reset_signal_results.get_nowait();self.reset_signals.busy=False
-                if data:
-                    if isinstance(self.reset_signals.data,dict) and self.reset_signals.data.get('accountConfirmation'):
-                        data['accountConfirmation']=self.reset_signals.data['accountConfirmation']
-                    self.reset_signals.data=data;self.reset_signals.error=None
-                    from reset_signals import _atomic_write
-                    _atomic_write(self.reset_signals.path,data)
-                else:self.reset_signals.error=error
-                self.last_tooltip_text=None;self.request_repaint();self.update_tooltip();self.publish_details()
-            except Exception:self.reset_signals.busy=False;self.log_error()
+            self.apply_reset_signal_result()
             return 0
         if msg==0x800B:
             try:

@@ -17,7 +17,7 @@ import sidebar_supervisor as supervisor
 
 REPORT = {'reports': [{'provider': 'openai', 'quota': {
     'weeklyPercent': 5, 'aggregation': {'currentAccount': {
-        'plan': 'prolite', 'quota': {'weeklyResetAt': 2000000000}}}}}]}
+        'plan': 'prolite', 'quota': {'weeklyPercent': 5, 'weeklyResetAt': 2000000000}}}}}]}
 RPC_SERVER = '''
 import json, sys, time
 for line in sys.stdin:

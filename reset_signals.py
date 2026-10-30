@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 FORECAST_URL='https://codex-reset.com/api/forecast'
 FEED_URL='https://codex-reset.com/api/feed'
 POLL_SECONDS=15*60
+RETRY_SECONDS=(60,120,240,480,900)
 STALE_SECONDS=45*60
 USER_AGENT='codex-quota-badge/1.1 (+local read-only companion)'
 
@@ -111,19 +112,45 @@ def fetch():
 class ResetSignals:
     def __init__(self,path,fetcher=None,clock=None):
         self.path=Path(path);self.fetcher=fetcher or fetch;self.clock=clock or time.time
-        self.data=None;self.error=None;self.busy=False;self.nextPoll=0
+        self.data=None;self.error=None;self.busy=False;self.nextPoll=0;self.failures=0
+        self._refresh_lock=threading.Lock()
         try:
             value=json.loads(self.path.read_text(encoding='utf-8'))
             if isinstance(value,dict):self.data=value
         except (OSError,ValueError):pass
-    def due(self):return not self.busy and self.clock()>=self.nextPoll
+    def due(self):
+        with self._refresh_lock:return not self.busy and self.clock()>=self.nextPoll
+    def begin_refresh(self):
+        """Reserve the single flight for synchronous or sidebar workers."""
+        with self._refresh_lock:
+            if self.busy or self.clock()<self.nextPoll:return False
+            self.busy=True
+            return True
+    def finish_refresh(self,value=None,error=None):
+        """Commit a last-good result and schedule from completion, in one place."""
+        with self._refresh_lock:
+            if not self.busy:return False
+            try:
+                if not error:
+                    if not isinstance(value,dict) or not value:raise ValueError('Invalid reset result')
+                    value=dict(value)
+                    if isinstance(self.data,dict) and self.data.get('accountConfirmation'):
+                        value['accountConfirmation']=self.data['accountConfirmation']
+                    # A failed fetch/write must not advance last-good timestamps.
+                    _atomic_write(self.path,value)
+                    self.data=value
+            except Exception as exc:error=type(exc).__name__
+            self.error=error or None
+            self.failures=self.failures+1 if self.error else 0
+            delay=RETRY_SECONDS[min(self.failures-1,len(RETRY_SECONDS)-1)] if self.error else POLL_SECONDS
+            self.nextPoll=self.clock()+delay
+            self.busy=False
+            return True
     def refresh(self):
-        self.busy=True;self.nextPoll=self.clock()+POLL_SECONDS
-        try:
-            value=self.fetcher();self.data=value;self.error=None
-            _atomic_write(self.path,value)
-        except Exception as exc:self.error=type(exc).__name__
-        finally:self.busy=False
+        if not self.begin_refresh():return
+        try:value=self.fetcher();error=None
+        except Exception as exc:value=None;error=type(exc).__name__
+        self.finish_refresh(value,error)
     def view(self):
         if not self.data:return {'state':'unavailable','freshness':'unavailable','error':self.error,'source':'codex-reset.com','lastSyncAt':None}
         result=dict(self.data);last_sync=result.get('fetchedAt',result.get('updatedAt',0));age=max(0,self.clock()-last_sync);result['stale']=age>STALE_SECONDS;result['error']=self.error
