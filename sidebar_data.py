@@ -61,6 +61,9 @@ def validate_config(config):
     for key in ('compactMode','quotaAlertEnabled'):
         config.setdefault(key,False)
         if not isinstance(config[key],bool):raise ValueError('Invalid '+key)
+    config.setdefault('quotaAccount','main')
+    if not isinstance(config['quotaAccount'],str) or config['quotaAccount'] not in ('main','secondary'):
+        raise ValueError('额度显示账号请选择主账号或副账号')
     config.setdefault('quotaAlertThreshold',20)
     if type(config['quotaAlertThreshold']) is not int or not 1<=config['quotaAlertThreshold']<=100:
         raise ValueError('额度提醒阈值请输入 1–100 的整数')

@@ -4,7 +4,7 @@ import copy
 import json
 from unittest.mock import patch
 
-from quota_badge import weekly_quota,weekly_quota_from_opencodex_report,fetch_quota
+from quota_badge import weekly_quota,weekly_quota_from_opencodex_report,_fetch_legacy_quota
 from hover_panel import render_quota_chart
 
 
@@ -32,7 +32,7 @@ class QuotaWindowsTests(unittest.TestCase):
 
     def test_current_report_never_starts_rpc_fallback(self):
         with patch('quota_badge._provider_quota_output',return_value=json.dumps(self.current_report())),patch('quota_badge.find_codex',side_effect=AssertionError('unexpected fallback')):
-            self.assertEqual(fetch_quota()['remaining'],72)
+            self.assertEqual(_fetch_legacy_quota()['remaining'],72)
 
     def test_pool_fallback_keeps_both_windows_in_pool_scope(self):
         report=self.current_report();report['reports'][0]['aggregation'].pop('currentAccount')

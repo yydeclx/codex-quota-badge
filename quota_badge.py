@@ -2,6 +2,7 @@
 import ctypes as C
 from ctypes import wintypes as W
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -21,6 +22,9 @@ REFRESH_SECONDS = 300
 QUOTA_COMMAND_TIMEOUT = 15
 QUOTA_RPC_TIMEOUT = 25
 MAX_QUOTA_OUTPUT = 1024 * 1024
+# Current display needs a tighter bound than OpenCodex's 6h disk retention.
+# Reads never renew the original observation timestamp.
+QUOTA_CACHE_MAX_AGE = 15 * 60
 
 
 def _close_reader(proc, reader):
@@ -171,7 +175,104 @@ def find_opencodex():
     raise FileNotFoundError('OpenCodex ocx executable unavailable')
 
 
-def fetch_quota():
+def _quota_cache_json(path):
+    """Read bounded JSON without exposing private file contents in exceptions."""
+    try:
+        with path.open('rb') as stream:
+            raw = stream.read(MAX_QUOTA_OUTPUT + 1)
+        if len(raw) > MAX_QUOTA_OUTPUT:
+            raise ValueError
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise ValueError
+        return result
+    except (OSError, ValueError, RecursionError):
+        raise ValueError('Account quota cache/config unavailable') from None
+
+
+def _quota_stamp(value):
+    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+        return None
+    return value / 1000 if value > 10**12 else value
+
+
+def _account_quota_window(source, percent_key, reset_key, now):
+    used = source.get(percent_key)
+    reset = _quota_stamp(source.get(reset_key))
+    if (type(used) not in (int, float) or not math.isfinite(used)
+            or not 0 <= used <= 100 or reset is None or reset <= now):
+        return None
+    return {'remaining': _bounded_percent(used), 'resetsAt': reset}
+
+
+def fetch_quota(account='main'):
+    """Read exactly the role selected by config quotaAccount ('main'/'secondary').
+
+    No CLI/current-account, app-server, pool, network refresh, or cross-role
+    fallback is permitted here. Cache age is measured using its own updatedAt,
+    never file mtime or read time. Errors leave recovery/stale UI to the caller.
+    quotaAccountKey is for AccountQuotaHistory.select, not a display identity.
+    Main uses a fixed role fingerprint: without a safe identity-bound snapshot
+    it cannot distinguish replacing the native main login. Secondary fingerprints
+    follow configured IDs; changing a credential behind the same ID is likewise
+    not detectable from this cache. No credentials or email fields are consulted.
+    """
+    if not isinstance(account, str) or account not in ('main', 'secondary'):
+        raise ValueError('quotaAccount must be main or secondary')
+    root = Path(os.environ.get('OPENCODEX_HOME') or Path.home() / '.opencodex')
+    selected_id, plan = '__main__', None
+    if account == 'secondary':
+        config = _quota_cache_json(root / 'config.json')
+        accounts = config.get('codexAccounts')
+        if not isinstance(accounts, list):
+            raise ValueError('Configured secondary account unavailable')
+        # Do not choose by ordering, active route, plan, or which cache is fresh.
+        candidates = [row for row in accounts if isinstance(row, dict)
+                      and row.get('isMain') is False]
+        if len(candidates) != 1:
+            raise ValueError('Configured secondary account missing or ambiguous')
+        selected_id = candidates[0].get('id')
+        if (not isinstance(selected_id, str) or not selected_id.strip()
+                or selected_id.startswith('__')):
+            raise ValueError('Invalid configured secondary account')
+        candidate_plan = candidates[0].get('plan')
+        # Only publish known plan labels, never arbitrary configuration text.
+        if candidate_plan in ('free', 'plus', 'pro', 'prolite', 'team', 'business',
+                              'enterprise', 'edu'):
+            plan = candidate_plan
+
+    cache = _quota_cache_json(root / 'codex-quota-cache.json')
+    quotas = cache.get('quotas')
+    selected = quotas.get(selected_id) if isinstance(quotas, dict) else None
+    if not isinstance(selected, dict):
+        raise ValueError('Selected account quota unavailable')
+    now = time.time()
+    updated = _quota_stamp(selected.get('updatedAt'))
+    if updated is None or not 0 <= now - updated <= QUOTA_CACHE_MAX_AGE:
+        raise ValueError('Selected account quota timestamp missing or stale')
+    weekly = _account_quota_window(selected, 'weeklyPercent', 'weeklyResetAt', now)
+    if weekly is None:
+        raise ValueError('Selected account weekly window unavailable or expired')
+    five_hour = _account_quota_window(selected, 'fiveHourPercent', 'fiveHourResetAt', now)
+    # Newer caches call short windows "short"; only a confirmed 5h window fits.
+    if five_hour is None and selected.get('shortWindowSeconds') == 18000:
+        short_updated = _quota_stamp(selected.get('shortObservedAt'))
+        if short_updated is not None and 0 <= now - short_updated <= QUOTA_CACHE_MAX_AGE:
+            five_hour = _account_quota_window(selected, 'shortPercent', 'shortResetAt', now)
+    identity = 'role-only' if account == 'main' else selected_id
+    fingerprint = hashlib.sha256(
+        ('quota-account-v1\0' + account + '\0' + identity).encode('utf-8')).hexdigest()
+    return {**weekly, 'fiveHour': five_hour, 'planType': plan, 'updatedAt': updated,
+            'quotaSource': 'opencodex account quota cache', 'quotaScope': 'selected-account',
+            'quotaAccount': account, 'quotaAccountKey': fingerprint}
+
+
+def _fetch_legacy_quota():
+    """Legacy unscoped transport, retained for offline process-cleanup tests only.
+
+    Production role selection must use fetch_quota; this may select a pool or
+    a different account and deliberately has no quotaAccountKey contract.
+    """
     # Prefer the read-only provider quota observation used by OpenCodex 2.92+
     # and fall back to the older Codex app-server response for older clients.
     try:

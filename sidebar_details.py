@@ -371,7 +371,8 @@ class Details:
         self.root.clipboard_clear();self.root.clipboard_append(diagnostic(self.snapshot,self.provider));self.root.update();self.subtitle.set('诊断摘要已复制 · 不含密钥和正文')
     def quota(self):
         q=self.snapshot.get('quota') or {};cycle=self.snapshot.get('quotaHistory')
-        self.card('周额度',f"剩余 {q.get('remaining','—')}%")
+        account_label={'main':'主账号','secondary':'副账号'}.get(q.get('quotaAccount'),'')
+        self.card(account_label+'周额度',f"剩余 {q.get('remaining','—')}%")
         if not cycle:self.card('开始记录后显示每日变化');return
         reset=dt.datetime.fromtimestamp(cycle['reset']);hours=max(0,int((cycle['reset']-time.time())/3600))
         self.card('距重置',f'{hours//24} 天 {hours%24} 小时 · {reset:%m/%d %H:%M}')

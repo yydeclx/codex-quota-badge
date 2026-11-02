@@ -8,7 +8,13 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.5.4](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.4)**
+> 当前最新版本：**[v1.5.5](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.5)**
+
+## v1.5.5 更新
+
+- 默认显示主账号额度，管理页「行为与服务 → 额度与刷新」可切换主账号或副账号
+- 选择仅影响显示，不改变 OpenCodex 请求路由；额度卡片标明账号角色
+- 账号历史分开保存，切换中的旧结果不会覆盖新账号；旧未区分账号的历史原件继续保留
 
 ## v1.5.4 更新
 

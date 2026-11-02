@@ -69,6 +69,8 @@ class Manager:
         st.map('TButton',background=[('active','#e3e2df')])
         st.configure('Primary.TButton',background='#30302e',foreground='white');st.map('Primary.TButton',background=[('active','#484844')])
         st.configure('TSpinbox',font=self.font(15),padding=self.px(7),arrowsize=self.px(14),bordercolor='#dce1dd',lightcolor='white',darkcolor='white')
+        st.configure('QuotaAccount.TRadiobutton',font=self.font(13),background='white',foreground=self.INK)
+        st.map('QuotaAccount.TRadiobutton',background=[('active','white')])
         shell=tk.Frame(self.root,bg=self.BG,padx=self.px(20),pady=self.px(16));shell.pack(fill='both',expand=True)
         self.nav_frame=tk.Frame(shell,bg=self.BG,width=self.px(148));self.nav_frame.pack(side='left',fill='y',padx=(0,self.px(20)));self.nav_frame.pack_propagate(False)
         title_row=tk.Frame(self.nav_frame,bg=self.BG);title_row.pack(fill='x',padx=self.px(10),pady=(self.px(3),self.px(22)))
@@ -154,6 +156,12 @@ class Manager:
         self.option(activity,'紧凑模式','运行中、待查看为 0 持续 5 秒后隐藏；有任务时恢复',self.compact_mode)
         alert=self.card(settings)
         self.label(alert,'额度与刷新',15,bold=True).pack(anchor='w',pady=(0,self.px(10)))
+        self.quota_account=tk.StringVar(value=self.config.get('quotaAccount','main'))
+        line=self.option(alert,'额度显示账号',('只切换额度展示','不切换请求账号'))
+        choices=tk.Frame(line,bg='white');choices.pack(side='right')
+        for value,title in (('main','主账号'),('secondary','副账号')):
+            ttk.Radiobutton(choices,text=title,value=value,variable=self.quota_account,style='QuotaAccount.TRadiobutton').pack(side='left',padx=(self.px(8),0))
+        self.divider(alert)
         self.alert_enabled=tk.BooleanVar(value=self.config.get('quotaAlertEnabled',False))
         self.option(alert,'周额度提醒','剩余额度达到或低于阈值时提醒，每周期同一阈值只提醒一次',self.alert_enabled)
         self.alert_threshold=tk.IntVar(value=self.config.get('quotaAlertThreshold',20))
@@ -164,7 +172,7 @@ class Manager:
         line=self.option(recovery,'侧栏没有显示？','保留当前设置，重新连接客户端窗口',bold=True)
         self.button(line,text='启动 / 恢复侧栏',command=self.start).pack(side='right')
         self.label(settings,'用量统计来自本机 OpenCodex，非账号全设备或公司账单总量',12,muted=True).pack(anchor='w',pady=self.px(10))
-        for var in (self.style,self.quota_style,self.bottom,self.horizontal,self.gap,self.autostart,self.refresh,self.activity_enabled,self.realtime_metrics_enabled,self.compact_mode,self.alert_enabled,self.alert_threshold):var.trace_add('write',self.changed)
+        for var in (self.style,self.quota_style,self.quota_account,self.bottom,self.horizontal,self.gap,self.autostart,self.refresh,self.activity_enabled,self.realtime_metrics_enabled,self.compact_mode,self.alert_enabled,self.alert_threshold):var.trace_add('write',self.changed)
         self.gap.trace_add('write',self.apply_gap)
         self.ready=True;self.show(initial_page);self.root.protocol('WM_DELETE_WINDOW',self.close)
         set_window_icons(self.root)
@@ -383,6 +391,7 @@ class Manager:
             self.message.set('正在切换补丁并重启 OpenCodex，请等待完成后保存');return False
         try:
             snapshot=copy.deepcopy(self.config)
+            if hasattr(self,'quota_account'):snapshot['quotaAccount']=self.quota_account.get()
             for item,(enabled,gap) in zip(snapshot['items'],self.rows):item.update(enabled=enabled.get(),gapAfter=gap.get())
             snapshot.update(realtimeMetricsEnabled=self.realtime_metrics_enabled.get(),compactMode=self.compact_mode.get(),quotaAlertEnabled=self.alert_enabled.get(),quotaAlertThreshold=self.alert_threshold.get(),activityEnabled=self.activity_enabled.get(),style=self.style.get(),quotaStyle=self.quota_style.get(),bottomOffset=self.bottom.get(),horizontalOffset=self.horizontal.get(),gap=self.gap.get(),refreshSeconds=self.refresh.get());validate_config(snapshot)
             previous_mode=load_config().get('realtimeMetricsEnabled',True)

@@ -272,79 +272,79 @@ class QuotaProcessTests(unittest.TestCase):
                          'quota reader thread leaked')
 
     def test_provider_success_preserves_source(self):
-        result = quota.fetch_quota()
+        result = quota._fetch_legacy_quota()
         self.assertEqual(result['remaining'], 95)
         self.assertEqual(result['quotaSource'], 'opencodex provider quota')
         self.assertEqual(len(self.commands), 1)
 
     def test_rpc_fallback_discards_flood_and_malformed_lines(self):
         self.provider_code = 'print("invalid")'
-        self.assertEqual(quota.fetch_quota()['remaining'], 80)
+        self.assertEqual(quota._fetch_legacy_quota()['remaining'], 80)
         self.assertEqual(len(self.commands), 2)
 
     def test_provider_timeout_reaps_before_fallback(self):
         self.provider_code = 'import time; time.sleep(20)'
         with patch.object(quota, 'QUOTA_COMMAND_TIMEOUT', .15):
-            self.assertEqual(quota.fetch_quota()['remaining'], 80)
+            self.assertEqual(quota._fetch_legacy_quota()['remaining'], 80)
         self.assertEqual(len(self.commands), 2)
 
     def test_oversized_provider_output_falls_back(self):
         self.provider_code = 'import sys,time; sys.stdout.write("x"*4097); sys.stdout.flush(); time.sleep(20)'
         with patch.object(quota, 'MAX_QUOTA_OUTPUT', 4096):
-            self.assertEqual(quota.fetch_quota()['remaining'], 80)
+            self.assertEqual(quota._fetch_legacy_quota()['remaining'], 80)
 
     def test_invalid_utf8_provider_output_falls_back(self):
         self.provider_code = 'import sys; sys.stdout.buffer.write(b"\\xff\\xfe")'
-        self.assertEqual(quota.fetch_quota()['remaining'], 80)
+        self.assertEqual(quota._fetch_legacy_quota()['remaining'], 80)
 
     def test_provider_nonzero_exit_falls_back(self):
         self.provider_code = 'import sys; sys.exit(7)'
-        self.assertEqual(quota.fetch_quota()['remaining'], 80)
+        self.assertEqual(quota._fetch_legacy_quota()['remaining'], 80)
 
     def test_provider_wrong_nested_types_fall_back(self):
         self.provider_code = 'print(' + repr(json.dumps({'reports': [{'provider': 'openai', 'quota': {
             'weeklyPercent': 5, 'aggregation': {'weekly': ['bad']}}}]})) + ')'
-        self.assertEqual(quota.fetch_quota()['remaining'], 80)
+        self.assertEqual(quota._fetch_legacy_quota()['remaining'], 80)
 
     def test_rpc_duplicate_responses_do_not_overflow_queue(self):
         self.provider_code = 'print("invalid")'
         self.rpc_code = RPC_SERVER.replace("print(json.dumps({'id': 1, 'result': {}}), flush=True)",
             "sys.stdout.write((json.dumps({'id': 1, 'result': {}})+'\\n')*5000); sys.stdout.flush()")
-        self.assertEqual(quota.fetch_quota()['remaining'], 80)
+        self.assertEqual(quota._fetch_legacy_quota()['remaining'], 80)
 
     def test_deeply_nested_provider_json_falls_back(self):
         self.provider_code = 'print("["*2000 + "]"*2000)'
-        self.assertEqual(quota.fetch_quota()['remaining'], 80)
+        self.assertEqual(quota._fetch_legacy_quota()['remaining'], 80)
 
     def test_rpc_timeout_is_bounded_and_reaped(self):
         self.provider_code = 'print("invalid")'
         self.rpc_code = 'import time; time.sleep(20)'
         with patch.object(quota, 'QUOTA_RPC_TIMEOUT', .15):
             with self.assertRaisesRegex(RuntimeError, 'timed out'):
-                quota.fetch_quota()
+                quota._fetch_legacy_quota()
 
     def test_rpc_eof_is_reported_immediately(self):
         self.provider_code = 'print("invalid")'
         self.rpc_code = 'pass'
         with self.assertRaises((RuntimeError, BrokenPipeError)):
-            quota.fetch_quota()
+            quota._fetch_legacy_quota()
 
     def test_rpc_oversized_line_is_rejected(self):
         self.provider_code = 'print("invalid")'
         self.rpc_code = 'import sys,time; sys.stdout.write("x"*4097); sys.stdout.flush(); time.sleep(20)'
         with patch.object(quota, 'MAX_QUOTA_OUTPUT', 4096):
             with self.assertRaisesRegex(RuntimeError, 'unavailable'):
-                quota.fetch_quota()
+                quota._fetch_legacy_quota()
 
     def test_reader_start_failure_closes_process_and_pipes(self):
         with patch.object(quota.threading.Thread, 'start', side_effect=RuntimeError('cannot start')):
             with self.assertRaisesRegex(RuntimeError, 'cannot start'):
-                quota.fetch_quota()
+                quota._fetch_legacy_quota()
 
     def test_uncertain_cleanup_never_starts_fallback(self):
         with patch.object(quota, '_provider_quota_output', side_effect=supervisor.ProcessCleanupError('uncertain')):
             with self.assertRaises(supervisor.ProcessCleanupError):
-                quota.fetch_quota()
+                quota._fetch_legacy_quota()
         self.assertEqual(self.commands, [])
 
 

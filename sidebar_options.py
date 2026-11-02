@@ -25,10 +25,15 @@ class QuotaAlert:
     def due(self,config,data):
         if not config.get('quotaAlertEnabled',False) or not data:return False
         threshold=config.get('quotaAlertThreshold',20)
-        return data['remaining']<=threshold and not (abs(self.sent.get('reset',0)-data['resetsAt'])<=2 and self.sent.get('threshold')==threshold)
+        key=data.get('quotaAccountKey')
+        sent=self.sent.get('accounts',{}).get(key,{}) if key else self.sent
+        return data['remaining']<=threshold and not (abs(sent.get('reset',0)-data['resetsAt'])<=2 and sent.get('threshold')==threshold)
     def mark(self,config,data):
         from sidebar_modules import atomic_json
-        self.sent={'reset':data['resetsAt'],'threshold':config['quotaAlertThreshold']}
+        value={'reset':data['resetsAt'],'threshold':config['quotaAlertThreshold']}
+        key=data.get('quotaAccountKey')
+        if key:self.sent.setdefault('accounts',{})[key]=value
+        else:self.sent.update(value)
         atomic_json(self.path,self.sent)
 if __name__=='__main__':
     import sys,tkinter as tk

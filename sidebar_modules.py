@@ -1,6 +1,7 @@
 """Local-only module adapters. No model calls and no writes to Codex databases."""
 import datetime as dt
 from contextlib import closing
+import hashlib
 import json
 import math
 import os
@@ -142,6 +143,48 @@ class QuotaHistory:
             cycle['lastLocalUsage']={k:usage.get(k) for k in ('date','totalTokens','requests','updatedAt')}
     def view(self):
         return self.data['cycles'][-1] if self.data['cycles'] else None
+
+class AccountQuotaHistory:
+    """One selected account's schema6 ledger; the legacy base file is never read.
+
+    Call select(quota.get('quotaAccountKey')) when accepting a selector change,
+    then observe(quota, ...). Missing/mismatched sample keys never change the
+    selection or write history. Keys must be stable anonymous strings, not
+    selector labels; their exact UTF-8 bytes determine the sibling filename.
+    """
+    def __init__(self,path=None):
+        self.path=Path(path or ROOT/'quota-history.json')
+        self.account_key=None
+        self._history=None
+
+    def select(self,account_key):
+        """Select a key and return its view; None/invalid keys clear selection."""
+        if not isinstance(account_key,str) or not account_key.strip():account_key=None
+        if account_key==self.account_key:return self.view()
+        # Release the previous ledger before loading another, including on error.
+        self.account_key=None
+        self._history=None
+        if account_key is not None:
+            digest=hashlib.sha256(account_key.encode('utf-8')).hexdigest()[:16]
+            path=self.path.with_name(f'{self.path.stem}-account-{digest}{self.path.suffix}')
+            self._history=QuotaHistory(path)
+            self.account_key=account_key
+        return self.view()
+
+    def observe(self,quota,local_usage=None,local_active=False,complete=False,force_local=False):
+        """Forward only samples belonging to the explicitly selected account."""
+        if (self._history is None or not isinstance(quota,dict)
+                or quota.get('quotaAccountKey')!=self.account_key):return
+        # Provider-wide activity cannot establish which pooled account paid.
+        # Without account-bound usage, retain the estimator's neutral/prior
+        # allocation instead of attributing another account's activity here.
+        if not isinstance(local_usage,dict) or local_usage.get('quotaAccountKey')!=self.account_key:
+            local_usage=None;local_active=False;force_local=False
+        return self._history.observe(quota,local_usage,local_active,complete,force_local)
+
+    def view(self):
+        return self._history.view() if self._history is not None else None
+
 
 UUID=re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 def classify_task(turn,items,unread=False):

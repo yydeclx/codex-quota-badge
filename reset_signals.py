@@ -136,6 +136,8 @@ class ResetSignals:
                     value=dict(value)
                     if isinstance(self.data,dict) and self.data.get('accountConfirmation'):
                         value['accountConfirmation']=self.data['accountConfirmation']
+                    if isinstance(self.data,dict) and self.data.get('quotaAccountKey'):
+                        value['quotaAccountKey']=self.data['quotaAccountKey']
                     # A failed fetch/write must not advance last-good timestamps.
                     _atomic_write(self.path,value)
                     self.data=value

@@ -136,7 +136,7 @@ def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_
     import datetime as dt
     import time
     ss=scale*3;p=lambda v:round(v*ss);width=264
-    is_pro = isinstance(plan_type,str) and plan_type.lower().startswith('pro') and five_hour is None
+    is_pro = five_hour is None and ((isinstance(plan_type,str) and plan_type.lower().startswith('pro')) or (reset_signal or {}).get('quotaAccountLabel') in ('主账号','副账号'))
     module_offset=68 if reset_signal is not None else 0
     height=251+module_offset
     im=Image.new('RGBA',(p(width),p(height)));shadow=Image.new('RGBA',im.size)
@@ -232,7 +232,8 @@ def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_
         quota_column((18+divider)/2,'5 小时额度',five_hour)
     right_center=(divider+width-18)/2
     safe_remaining=max(0,min(100,float(remaining))) if isinstance(remaining,(int,float)) else None
-    quota_column(right_center,'实际周额度',{'remaining':safe_remaining,'resetsAt':reset} if safe_remaining is not None and reset else None,True,78.5 if is_pro else 75,'mm' if is_pro else 'mt')
+    account_label=(reset_signal or {}).get('quotaAccountLabel')
+    quota_column(right_center,account_label+'周额度' if account_label in ('主账号','副账号') else '实际周额度',{'remaining':safe_remaining,'resetsAt':reset} if safe_remaining is not None and reset else None,True,78.5 if is_pro else 75,'mm' if is_pro else 'mt')
     chart_offset=0
     if is_pro and expected is not None and isinstance(remaining,(int,float)):
         delta=round(remaining-expected)

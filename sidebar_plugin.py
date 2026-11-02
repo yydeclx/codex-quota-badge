@@ -36,8 +36,9 @@ class SidebarPlugin(Badge):
         self.activity=ProviderActivity(history_path=None if test_host else CONFIG.with_name('connection-history.json'),enabled=self.config.get('realtimeMetricsEnabled',True))
         from sidebar_telemetry import Telemetry
         self.telemetry=Telemetry()
-        from sidebar_modules import Modules,QuotaHistory
-        self.modules=Modules();self.quota_history=QuotaHistory();self.next_snapshot=0
+        from sidebar_modules import Modules,AccountQuotaHistory
+        self.modules=Modules();self.quota_history=AccountQuotaHistory();self.next_snapshot=0
+        self.quota_generation=0
         from sidebar_options import CompactRows,QuotaAlert
         self.compact_rows=CompactRows();self.quota_alert=QuotaAlert(CONFIG.with_name('quota-alert-state.json'))
         from reset_signals import ResetSignals
@@ -436,6 +437,7 @@ class SidebarPlugin(Badge):
             plan_type=self.data.get('planType') if valid else None
             if not (isinstance(five_hour,dict) and five_hour.get('resetsAt',0)>time.time()):five_hour=None
             reset_signal=self.reset_signals.view()
+            reset_signal={**reset_signal,'quotaAccountLabel':'副账号' if self.config.get('quotaAccount')=='secondary' else '主账号'}
             age=reset_signal.get('syncAgeSeconds')
             if isinstance(age,(int,float)):
                 reset_signal={**reset_signal,'syncAgeSeconds':min(3600,max(0,int(age//60)*60))}
@@ -570,6 +572,27 @@ class SidebarPlugin(Badge):
         if (tip.left,tip.top)!=(x,y):
             self.win.u.SetWindowPos(self.tooltip,W.HWND(-1),x,y,0,0,0x1|0x10)
 
+    def restore_last_quota(self):
+        # Previously persisted quota may belong to a different account. Wait for
+        # a fresh, explicitly selected observation before showing any balance.
+        return None,False
+
+    def accept_quota(self,data):
+        if 'quotaAccount' in self.config and (data.get('quotaAccount')!=self.config['quotaAccount'] or not data.get('quotaAccountKey')):
+            return False
+        key=data.get('quotaAccountKey')
+        if hasattr(self.quota_history,'select'):
+            self.quota_history.select(key)
+        previous=getattr(self,'data',None) or {}
+        if previous.get('quotaAccountKey')!=key:
+            self.last_quota_remaining=None;self.pending_settlement=None
+        if self.reset_signals.data is not None and self.reset_signals.data.get('quotaAccountKey')!=key:
+            self.reset_signals.data.pop('accountConfirmation',None)
+            self.reset_signals.data.pop('accountCandidate',None)
+            self.reset_signals.data['quotaAccountKey']=key
+        super().accept_quota(data)
+        return True
+
     def reload_config(self):
         stamp=CONFIG.stat().st_mtime_ns
         if stamp==self.config_stamp:return
@@ -578,7 +601,16 @@ class SidebarPlugin(Badge):
         except Exception as exc:
             self.config_error=str(exc);return
         self.track_hover(False)
+        account_changed=candidate.get('quotaAccount','main')!=self.config.get('quotaAccount','main')
         self.config=candidate;self.config_stamp=stamp;self.config_error=None
+        if account_changed:
+            self.quota_generation=getattr(self,'quota_generation',0)+1
+            self.data=None;self.error=False;self.refresh_failures=0;self.next_refresh=0
+            self.last_quota_remaining=None;self.pending_settlement=None;self.last_complete_sample=0
+            self.quota_history.select(None)
+            if isinstance(self.reset_signals.data,dict):
+                self.reset_signals.data.pop('accountConfirmation',None)
+                self.reset_signals.data.pop('accountCandidate',None)
         self.hover_tile=None
         self.activity.set_enabled(self.config.get('realtimeMetricsEnabled',True))
         self.hover_item=None;self.last_tooltip_text=None;self.geometry=None
@@ -690,12 +722,13 @@ class SidebarPlugin(Badge):
             self.gpt_boundary_due=time.monotonic()+2;self.gpt_boundary_active=self.gpt_boundary_active or bool(local_active);return
         if time.monotonic()-self.last_complete_sample<10:return
         self.boundary_busy=True
+        account=self.config.get('quotaAccount','main');generation=getattr(self,'quota_generation',0)
         def worker():
             try:
                 from quota_badge import fetch_quota
-                quota=fetch_quota();usage=fetch_usage();error=None
+                quota=fetch_quota(account);usage=fetch_usage();error=None
             except Exception as exc:quota=usage=None;error=type(exc).__name__
-            self.boundary_results.put((quota,usage,bool(local_active),bool(settlement),error))
+            self.boundary_results.put((quota,usage,bool(local_active),bool(settlement),error,generation))
             self.win.u.PostMessageW(self.controller,0x8009,0,0)
         try:threading.Thread(target=worker,daemon=True).start()
         except Exception:self.boundary_busy=False
@@ -838,10 +871,14 @@ class SidebarPlugin(Badge):
             return 0
         if msg==0x8009:
             try:
-                quota,usage,active,settlement,error=self.boundary_results.get_nowait();self.boundary_busy=False
+                result=self.boundary_results.get_nowait();quota,usage,active,settlement,error=result[:5];self.boundary_busy=False
+                if len(result)>5 and result[5]!=getattr(self,'quota_generation',0):
+                    self.next_refresh=0
+                    return 0
                 if not error:
                     before=self.quota_history.view().get('lastRemaining') if self.quota_history.view() else None
-                    self.accept_quota(quota);self.usage,self.usage_error=usage,None
+                    if self.accept_quota(quota) is False:return 0
+                    self.usage,self.usage_error=usage,None
                     local=item_usage(usage,'openai',max_age=max(180,3*self.config['refreshSeconds']))
                     if local is not None:local={**local,'date':usage.get('date'),'updatedAt':usage.get('updatedAt')}
                     self.quota_history.observe(quota,local,active,True,settlement);self.last_complete_sample=time.monotonic()

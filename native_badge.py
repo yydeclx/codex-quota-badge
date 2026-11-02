@@ -363,12 +363,14 @@ class Badge:
             self.update_visual()
             return
         self.busy = True
+        account=getattr(self,'config',{}).get('quotaAccount','main')
+        generation=getattr(self,'quota_generation',0)
         def worker():
             try:
-                self.results.put((fetch_quota(), False))
+                self.results.put((fetch_quota(account), False, generation))
             except Exception as exc:
                 # Keep only the error class, never CLI output or credentials.
-                self.results.put((None, type(exc).__name__))
+                self.results.put((None, type(exc).__name__, generation))
             self.win.u.PostMessageW(self.controller, 0x8001, 0, 0)
         try:threading.Thread(target=worker, daemon=True).start()
         except Exception as exc:
@@ -614,7 +616,10 @@ class Badge:
                     self.heartbeat()
                 return 0
             if msg == 0x8001:
-                data,error = self.results.get_nowait()
+                result=self.results.get_nowait();data,error=result[:2]
+                if len(result)>2 and result[2]!=getattr(self,'quota_generation',0):
+                    self.busy=False;self.next_refresh=0
+                    return 0
                 if data:
                     self.accept_quota(data)
                 else:
