@@ -1,4 +1,5 @@
 #!/bin/sh
 set -eu
-cd "$(dirname "$0")"
-exec python3 mac_sidebar.py
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$DIR"
+exec python3 "$DIR/mac_sidebar.py"
