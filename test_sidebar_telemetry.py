@@ -46,6 +46,20 @@ class TelemetryTests(unittest.TestCase):
             t=Telemetry(path);t._records()
             self.assertEqual(len(t.rows['openai']),1)
             self.assertEqual(set(t.rows['openai'][0]),{'timestamp','status','durationMs','outcome','retries'})
+    def test_completed_metrics_survive_sleep_and_read_failure(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'usage.jsonl'
+            entries=[{'provider':'SKG',**self.row(timestamp=at,firstOutputMs=500,decodeTokPerSecond=40)} for at in (100000,200000)]
+            path.write_text(''.join(json.dumps(r)+'\n' for r in entries),encoding='utf-8')
+            t=Telemetry(path);t._records()
+            with patch('sidebar_telemetry.time.monotonic',return_value=t.records_at+120):
+                self.assertEqual(t.view('SKG')['latest']['firstOutputMs'],500)
+                self.assertEqual(t.view('SKG')['previous']['decodeTokPerSecond'],40)
+            path.unlink();self.assertFalse(t._records())
+            self.assertEqual(t.view('SKG')['latest']['timestamp'],200000)
+            self.assertIsNone(t.view('absent')['latest'])
+
     def test_local_days_and_provider_merge(self):
         now=dt.datetime.now().astimezone();end=(int(now.timestamp())//3600+1)*3600
         data={'start':end-168*3600,'buckets':168,'bucketSeconds':3600,'metric':'total','aggregation':'sum','series':[{'provider':'openai','points':[1]*168},{'provider':'openai-pabcdef','points':[2]*168}]}

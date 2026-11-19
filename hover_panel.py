@@ -258,7 +258,8 @@ def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_
         title=(f"{days[focus]:%m/%d}  总{labels['total']}% · 本机{labels['local']}% · 非本机{labels['other']}%"
                if selected_total is not None else f'{days[focus]:%m/%d} · 尚未记录')
     else:
-        title=f"周期总{summary['labels']['total']}% · 归因估算"
+        confidence=summary['ledger'].get('attributionConfidence')
+        title=f"周期总{summary['labels']['total']}% · "+(f'{confidence}置信估算' if confidence else '归因估算')
     title_font=fonts[3] if d.textlength(title,font=fonts[3])<=p(width-36) else ui_font('C:/Windows/Fonts/msyh.ttc',p(8))
     d.text((p(18),p(102+module_offset)),title,font=title_font,fill='#555550')
     plot_left,plot_right=22,width-22

@@ -15,6 +15,33 @@ class PowerTests(unittest.TestCase):
         p.modules=MagicMock();p.telemetry=MagicMock();p.activity=MagicMock()
         p.track_hover=MagicMock()
         return p
+    def test_background_mouse_event_wakes_hover_only(self):
+        p=self.make();p.hwnd=44;p.hover_timer_ms=None
+        p.background_hover_hit=MagicMock(return_value=True);p.poll_hover=MagicMock()
+        self.assertEqual(p.window_proc(44,0x200,0,0),0)
+        p.win.u.SetTimer.assert_called_once_with(33,2,150,None)
+        p.poll_hover.assert_called_once()
+        p.modules.poll.assert_not_called();p.telemetry.poll.assert_not_called();p.activity.poll.assert_not_called()
+        p.window_proc(44,0x200,0,0)
+        p.win.u.SetTimer.assert_called_once()
+
+    def test_background_leave_stops_hover_timer(self):
+        p=self.make();p.interaction_mode=False;p.hover_timer_ms=150
+        p.background_hover_hit=MagicMock(return_value=False)
+        p.poll_hover()
+        p.win.u.KillTimer.assert_called_once_with(33,2)
+        p.track_hover.assert_called_with(False)
+        self.assertIsNone(p.hover_timer_ms)
+
+    def test_background_hit_rejects_covering_window_and_minimized_host(self):
+        p=self.make();p.hwnd=44;p.tooltip_active=True
+        p.win.u.WindowFromPoint.return_value=99
+        self.assertFalse(p.background_hover_hit())
+        p.win.u.WindowFromPoint.return_value=44
+        self.assertTrue(p.background_hover_hit())
+        p.win.u.IsIconic.return_value=True
+        self.assertFalse(p.background_hover_hit())
+
     def test_background_pauses_and_foreground_wakes(self):
         p=self.make();p.win.u.GetForegroundWindow.return_value=99
         self.assertFalse(p.sync_power_mode())

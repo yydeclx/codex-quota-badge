@@ -98,6 +98,8 @@ def _allocate(total,weights):
 def estimate_share(cycle,gap=0,local_evidence=False,covered=False):
     """A neutral prior, updated by observed usage; no token-to-quota conversion."""
     local=number(cycle.get('localUsed'));other=number(cycle.get('otherUsed'))
+    if cycle.get('attributionMethod')=='account-request-calibration-v2':
+        return local/(local+other) if local+other else 0
     prior=(local+1)/(local+other+2)
     if local_evidence:
         coverage=min(1,900/max(1,gap))
@@ -193,7 +195,9 @@ def reconcile_cycle(value):
     cycle['days']={day:{'points':round(sum(cycle[daily].get(day,{}).get('points',0) for _,daily in SOURCES),4),
                         'samples':cycle.get('days',{}).get(day,{}).get('samples',0)} for day in sorted(keys)}
     for key in ('unknownUsed','unknownDays','unallocated'):cycle.pop(key,None)
-    cycle['attributionMethod']='two-source-interval-estimate-v1'
+    cycle['attributionMethod']=(value.get('attributionMethod') if isinstance(value,dict)
+                              and value.get('attributionMethod')=='account-request-calibration-v2'
+                              else 'two-source-interval-estimate-v1')
     return cycle
 
 def apply_credit(cycle,points):

@@ -354,6 +354,9 @@ class Badge:
             return {**quota,'fiveHour':five},error
         except (OSError,ValueError,TypeError):return None,False
 
+    def read_quota(self, account):
+        return fetch_quota(account)
+
     def refresh(self):
         if self.busy:
             return
@@ -367,7 +370,7 @@ class Badge:
         generation=getattr(self,'quota_generation',0)
         def worker():
             try:
-                self.results.put((fetch_quota(account), False, generation))
+                self.results.put((self.read_quota(account), False, generation))
             except Exception as exc:
                 # Keep only the error class, never CLI output or credentials.
                 self.results.put((None, type(exc).__name__, generation))
@@ -499,7 +502,7 @@ class Badge:
     def poll_hover(self):
         inside = False
         if (self.hwnd and self.tooltip and self.win.u.IsWindow(self.hwnd)
-                and self.win.u.GetForegroundWindow() == self.target
+                and self.win.u.IsWindowVisible(self.hwnd)
                 and not self.win.u.IsIconic(self.target)):
             cursor, bounds = W.POINT(), W.RECT()
             if self.win.u.GetCursorPos(C.byref(cursor)) and self.win.u.GetWindowRect(self.hwnd,C.byref(bounds)):

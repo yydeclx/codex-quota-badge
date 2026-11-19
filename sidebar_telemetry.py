@@ -191,7 +191,9 @@ class Telemetry:
             return False
     def view(self,provider):
         with self.lock:
-            rows=list(self.rows.get(provider,[])) if self.records_at and time.monotonic()-self.records_at<15 else []
+            # Completed records are historical facts, not live samples. Sleeping
+            # or a transient read failure must not erase their metrics.
+            rows=list(self.rows.get(provider,[]))
             display_index=display_request_index(rows)
             latest=rows[display_index] if display_index is not None else None
             previous=next((row for row in reversed(rows[:display_index] if display_index is not None else [])

@@ -35,7 +35,7 @@ $python = $pythonCommand.Source
 $programFiles = @(
     'version.py', 'quota_badge.py', 'quota_styles.py', 'native_badge.py',
     'sidebar_plugin.py', 'sidebar_compat.py', 'window_mode.py', 'sidebar_activity.py', 'sidebar_context.py',
-    'font_fallback.py', 'quota_accounting.py', 'patch_mode.py',
+    'font_fallback.py', 'quota_accounting.py', 'quota_attribution.py', 'quota_evidence.py', 'quota_native_evidence.py', 'patch_mode.py',
     'sidebar_data.py', 'sidebar_details.py', 'sidebar_manager.py',
     'sidebar_modules.py', 'sidebar_options.py', 'sidebar_startup.py',
     'sidebar_styles.py', 'sidebar_telemetry.py','live_metrics.py', 'sidebar_transparency.py',

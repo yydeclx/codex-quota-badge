@@ -174,7 +174,7 @@ class TwoSourceUiTests(unittest.TestCase):
                                  '10/29     总 11% · 本机 11% · 非本机 0%',
                                  '10/30     总 13% · 本机 12% · 非本机 1%'])
         note = cards['记录范围']
-        for text in ('开始采样', '归因估算', '本机用量/活动', '断档按比例估算分配', '非官方精确归因', '2 次额度回调'):
+        for text in ('开始采样', '归因估算', '本机用量', '非官方精确归因', '2 次额度回调'):
             self.assertIn(text, note)
         combined = '\n'.join([*cards.keys(), *cards.values(), *daily])
         for removed in ('来源待定', '待定', '日期待定位'):

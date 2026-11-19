@@ -18,14 +18,14 @@ class MenuRow(tk.Canvas):
     def invoke(self):self.callback()
     def hover(self,on):self.hot=on;self.draw()
     def draw(self):
-        from manager_widgets import surface
-        from PIL import Image,ImageDraw,ImageTk
         self.delete('all');w,h=self.winfo_width(),self.winfo_height();s=self.s
         if self.hot:
+            from manager_widgets import surface
             self.background=surface(self,w,h,'#eae9e6','#eae9e6',6*s)
             self.create_image(0,0,image=self.background,anchor='nw')
         self.create_text(round(8*s),h/2,text=self.title,font=self.font,fill='#262624',anchor='w')
         if self.checked:
+            from PIL import Image,ImageDraw,ImageTk
             size=max(1,round(10*s));im=Image.new('RGBA',(size*3,size*3));d=ImageDraw.Draw(im)
             d.line([(round(x*s*3),round(y*s*3)) for x,y in ((1.5,5),(4,7.3),(8.5,2.7))],fill='#666661',width=max(1,round(1.1*s*3)),joint='curve')
             self.mark=ImageTk.PhotoImage(im.resize((size,size),Image.Resampling.LANCZOS))
@@ -65,12 +65,11 @@ class ContextMenu:
         self.scale=scale
         from ui_presence import mark
         mark(self.root)
-        self.decorate()
         self.pending.append(self.root.after(60,self.decorate))
         from interaction_runtime import trace
         trace('menu_ready')
         self.root.focus_force();self.root.bind('<Escape>',lambda e:self.switch_page(False) if self.modules_page else self.finish(None))
-        self.pending.append(self.root.after(250,lambda:self.root.bind('<FocusOut>',self.blur)))
+        self.root.bind('<FocusOut>',self.blur)
     def build_page(self,modules=False):
         for child in self.body.winfo_children():child.destroy()
         self.buttons={};self.modules_page=modules;s=self.scale
@@ -151,8 +150,11 @@ class ContextMenu:
     def run(self):
         self.root.mainloop();self.root.destroy()
         if self.action=='manager':
-            from sidebar_manager import run_manager
-            run_manager()
+            # The sidebar uses this process lifetime to guard the menu.
+            # The manager has its own single-instance mutex and lifetime.
+            import subprocess
+            subprocess.Popen([sys.executable, str(ROOT/'sidebar_manager.py')],
+                             creationflags=subprocess.CREATE_NO_WINDOW)
         elif self.action in ('refresh','exit'):
             import json,ctypes as C
             from ctypes import wintypes as W

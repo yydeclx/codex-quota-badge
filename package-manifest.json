@@ -4,6 +4,9 @@
     "quota_badge.py",
     "quota_styles.py",
     "quota_accounting.py",
+    "quota_attribution.py",
+    "quota_evidence.py",
+    "quota_native_evidence.py",
     "patch_mode.py",
     "native_badge.py",
     "sidebar_plugin.py",
@@ -66,7 +69,7 @@
     "sidebar-status.json",
     "update-status.json"
   ],
-  "version": "1.5.5",
+  "version": "1.5.7",
   "directories": [
     ".codex-plugin",
     "skills"

@@ -3,6 +3,7 @@ import ctypes as C
 from ctypes import wintypes as W
 import datetime as dt
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -25,6 +26,62 @@ MAX_QUOTA_OUTPUT = 1024 * 1024
 # Current display needs a tighter bound than OpenCodex's 6h disk retention.
 # Reads never renew the original observation timestamp.
 QUOTA_CACHE_MAX_AGE = 15 * 60
+_LIVE_LOCK=threading.Lock()
+_LIVE_STATE={}
+
+
+def _live_account_quota(root, selected_id):
+    """Bounded loopback read; shared 5-minute refresh and exponential backoff.
+
+    Never selects an active/pool aggregate and never advances observation time.
+    Authentication stays on loopback; redirects and system proxies are unused.
+    """
+    with _LIVE_LOCK:
+        runtime=_quota_cache_json(root/'runtime-port.json')
+        port,pid=runtime.get('port'),runtime.get('pid')
+        if type(port) is not int or not 1<=port<=65535 or type(pid) is not int or pid<=0:
+            raise ValueError('Invalid quota runtime')
+        key=(str(root),pid,port);now=time.monotonic()
+        if _LIVE_STATE.get('key')!=key:
+            _LIVE_STATE.clear();_LIVE_STATE.update(key=key,due=0,rows={},failures=0)
+        if now>=_LIVE_STATE['due']:
+            conn=None
+            try:
+                with (root/'admin-api-token').open(encoding='utf-8') as f:token=f.read(4097).strip()
+                if not token or len(token)>4096 or '\n' in token or '\r' in token:raise ValueError('Invalid local authorization')
+                conn=http.client.HTTPConnection('127.0.0.1',port,timeout=8)
+                conn.request('GET','/api/codex-auth/accounts?refresh=1',headers={'Authorization':'Bearer '+token})
+                response=conn.getresponse()
+                if response.status!=200:raise ValueError('Quota endpoint unavailable')
+                body=response.read(MAX_QUOTA_OUTPUT+1)
+                if len(body)>MAX_QUOTA_OUTPUT:raise ValueError('Quota response oversized')
+                document=json.loads(body)
+                if not isinstance(document,dict):raise ValueError('Invalid quota response')
+                rows=document.get('accounts')
+                if not isinstance(rows,list):raise ValueError('Invalid account quota response')
+                current=_quota_cache_json(root/'runtime-port.json')
+                if (current.get('pid'),current.get('port'))!=(pid,port):raise ValueError('Quota runtime changed')
+                safe={}
+                for row in rows:
+                    if not isinstance(row,dict) or not isinstance(row.get('id'),str):continue
+                    ident=row['id']
+                    if ident in safe:raise ValueError('Duplicate account quota')
+                    if (ident=='__main__') != (row.get('isMain') is True):continue
+                    quota=row.get('quota')
+                    if not isinstance(quota,dict):continue
+                    safe[ident]={k:quota[k] for k in ('updatedAt','weeklyPercent','weeklyResetAt','fiveHourPercent','fiveHourResetAt','shortPercent','shortObservedAt','shortResetAt','shortWindowSeconds') if k in quota}
+                _LIVE_STATE.update(rows=safe,failures=0,due=time.monotonic()+300)
+            except (OSError,ValueError,TypeError,http.client.HTTPException):
+                failures=_LIVE_STATE['failures']+1
+                _LIVE_STATE.update(failures=failures,due=time.monotonic()+min(300,15*2**min(failures-1,5)))
+            finally:
+                if conn is not None:conn.close()
+        row=_LIVE_STATE['rows'].get(selected_id)
+        if not isinstance(row,dict):raise ValueError('Selected live account unavailable')
+        at=_quota_stamp(row.get('updatedAt'));clock=time.time()
+        if at is None or not 0<=clock-at<=QUOTA_CACHE_MAX_AGE:raise ValueError('Selected live quota stale')
+        if _account_quota_window(row,'weeklyPercent','weeklyResetAt',clock) is None:raise ValueError('Selected live window unavailable')
+        return dict(row)
 
 
 def _close_reader(proc, reader):
@@ -208,8 +265,9 @@ def _account_quota_window(source, percent_key, reset_key, now):
 def fetch_quota(account='main'):
     """Read exactly the role selected by config quotaAccount ('main'/'secondary').
 
-    No CLI/current-account, app-server, pool, network refresh, or cross-role
-    fallback is permitted here. Cache age is measured using its own updatedAt,
+    Prefer the authenticated local gateway's explicit account observation, with
+    bounded refresh/backoff; never select a current-account or pool aggregate.
+    Fallback cache age is measured using its own updatedAt,
     never file mtime or read time. Errors leave recovery/stale UI to the caller.
     quotaAccountKey is for AccountQuotaHistory.select, not a display identity.
     Main uses a fixed role fingerprint: without a safe identity-bound snapshot
@@ -241,30 +299,57 @@ def fetch_quota(account='main'):
                               'enterprise', 'edu'):
             plan = candidate_plan
 
-    cache = _quota_cache_json(root / 'codex-quota-cache.json')
+    live=None
+    try:live=_live_account_quota(root,selected_id)
+    except (OSError,ValueError,TypeError):pass
+    try:cache = _quota_cache_json(root / 'codex-quota-cache.json')
+    except ValueError:
+        if live is None:raise
+        cache={}
     quotas = cache.get('quotas')
-    selected = quotas.get(selected_id) if isinstance(quotas, dict) else None
+    selected = live if live is not None else quotas.get(selected_id) if isinstance(quotas, dict) else None
     if not isinstance(selected, dict):
         raise ValueError('Selected account quota unavailable')
     now = time.time()
     updated = _quota_stamp(selected.get('updatedAt'))
-    if updated is None or not 0 <= now - updated <= QUOTA_CACHE_MAX_AGE:
-        raise ValueError('Selected account quota timestamp missing or stale')
     weekly = _account_quota_window(selected, 'weeklyPercent', 'weeklyResetAt', now)
     if weekly is None:
         raise ValueError('Selected account weekly window unavailable or expired')
+    source='opencodex live account quota' if live is not None else 'opencodex account quota cache'
+    if updated is None or not 0 <= now - updated <= QUOTA_CACHE_MAX_AGE:
+        # Native response observations may be newer than the gateway's passive
+        # cache. Require the same identity and a unique matching weekly window;
+        # never refresh credentials, route a model call, or renew an old stamp.
+        policy=cache.get('mainPolicyQuota') or {}
+        identity_key=policy.get('identityKey') if isinstance(policy,dict) else None
+        matching=sum(isinstance(row,dict) and (_quota_stamp(row.get('weeklyResetAt')) is not None)
+                     and abs(_quota_stamp(row.get('weeklyResetAt'))-weekly['resetsAt'])<=120 for row in quotas.values())
+        native=[]
+        if account=='main' and isinstance(identity_key,str) and matching==1:
+            from quota_native_evidence import collect_native_samples
+            native=collect_native_samples(Path(os.environ.get('CODEX_HOME') or Path.home()/'.codex'),
+                                          identity_key,weekly['resetsAt'],now-QUOTA_CACHE_MAX_AGE,now)
+        if not native:raise ValueError('Selected account quota timestamp missing or stale')
+        observation=max(native,key=lambda row:row['at'])
+        weekly={'remaining':observation['remaining'],'resetsAt':observation['reset']}
+        updated=observation['at'];source='native identity-matched quota response'
     five_hour = _account_quota_window(selected, 'fiveHourPercent', 'fiveHourResetAt', now)
     # Newer caches call short windows "short"; only a confirmed 5h window fits.
     if five_hour is None and selected.get('shortWindowSeconds') == 18000:
         short_updated = _quota_stamp(selected.get('shortObservedAt'))
         if short_updated is not None and 0 <= now - short_updated <= QUOTA_CACHE_MAX_AGE:
             five_hour = _account_quota_window(selected, 'shortPercent', 'shortResetAt', now)
+    if source=='native identity-matched quota response':five_hour=None
     identity = 'role-only' if account == 'main' else selected_id
     fingerprint = hashlib.sha256(
         ('quota-account-v1\0' + account + '\0' + identity).encode('utf-8')).hexdigest()
+    source_identity=((cache.get('mainPolicyQuota') or {}).get('identityKey') if account=='main'
+                     else (((cache.get('history') or {}).get('accounts') or {}).get(selected_id) or {}).get('identity'))
+    identity_fingerprint=(hashlib.sha256(source_identity.encode()).hexdigest()
+                          if isinstance(source_identity,str) and 0<len(source_identity)<=1024 else None)
     return {**weekly, 'fiveHour': five_hour, 'planType': plan, 'updatedAt': updated,
-            'quotaSource': 'opencodex account quota cache', 'quotaScope': 'selected-account',
-            'quotaAccount': account, 'quotaAccountKey': fingerprint}
+            'quotaSource': source, 'quotaScope': 'selected-account',
+            'quotaAccount': account, 'quotaAccountKey': fingerprint,'quotaIdentity':identity_fingerprint}
 
 
 def _fetch_legacy_quota():

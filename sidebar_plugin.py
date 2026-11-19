@@ -319,11 +319,18 @@ class SidebarPlugin(Badge):
         # the child or add another timer for this small hover affordance.
         self.request_repaint()
 
+    def background_hover_hit(self):
+        if not getattr(self,'hwnd',None) or not self.target:return False
+        if not self.win.u.IsWindowVisible(self.hwnd) or self.win.u.IsIconic(self.target):return False
+        cursor=W.POINT()
+        if not self.win.u.GetCursorPos(C.byref(cursor)):return False
+        hit=self.win.u.WindowFromPoint(cursor)
+        return hit==self.hwnd or bool(getattr(self,'tooltip_active',False) and hit==self.tooltip)
+
     def poll_hover(self):
-        if getattr(self,'foreground_mode',True) is False:
-            self.set_hover_tile(None);return
-        if not self.test_host and self.win.u.GetForegroundWindow() not in (self.target,self.tooltip):
-            self.set_hover_tile(None);return
+        if not getattr(self,'interaction_mode',True) and not self.background_hover_hit():
+            self.win.u.KillTimer(self.controller,2);self.hover_timer_ms=None
+            self.set_hover_tile(None);self.track_hover(False);return
         # Do not reorder the child window on every 75 ms animation frame.
         # Chromium can repaint adjacent native UI when its sibling z-order is
         # repeatedly touched; the low-frequency heartbeat and WinEvent path
@@ -363,11 +370,11 @@ class SidebarPlugin(Badge):
                 if bounds.left<=point.x<bounds.right and bounds.top<=point.y<bounds.bottom and index>=0:item=self.items[index]['id']
         self.set_hover_tile(item)
         if getattr(self,'menu_active',False):return
-        if self.config.get('realtimeMetricsEnabled',True):self.refresh_visible_metrics(now)
+        if getattr(self,'foreground_mode',True) and self.config.get('realtimeMetricsEnabled',True):self.refresh_visible_metrics(now)
         if self.tooltip_active and self.tooltip:
             cursor,tip=W.POINT(),W.RECT()
             self.win.u.GetCursorPos(C.byref(cursor));self.win.u.GetWindowRect(self.tooltip,C.byref(tip))
-            if self.win.u.IsIconic(self.target) or self.win.u.GetForegroundWindow() not in (self.target,self.tooltip):
+            if self.win.u.IsIconic(self.target):
                 self.track_hover(False);return
             if tip.left<=cursor.x<tip.right and tip.top<=cursor.y<tip.bottom:
                 self.hover_departed=None
@@ -577,12 +584,29 @@ class SidebarPlugin(Badge):
         # a fresh, explicitly selected observation before showing any balance.
         return None,False
 
+    def read_quota(self,account):
+        from pathlib import Path
+        from quota_attribution import prepare,estimate
+        quota=super().read_quota(account)
+        try:
+            cycle=prepare(quota,Path(os.environ.get('OPENCODEX_HOME') or Path.home()/'.opencodex'),CONFIG.parent)
+        except Exception as exc:
+            # Balance remains available even if local evidence is unavailable.
+            # Never fall back to the old equal split or borrow another account.
+            cycle=estimate(quota,account,{account:[]},{'requests':[],'complete':False})
+            cycle['evidenceError']=type(exc).__name__
+        quota['_attribution']=cycle
+        return quota
+
     def accept_quota(self,data):
         if 'quotaAccount' in self.config and (data.get('quotaAccount')!=self.config['quotaAccount'] or not data.get('quotaAccountKey')):
             return False
         key=data.get('quotaAccountKey')
         if hasattr(self.quota_history,'select'):
             self.quota_history.select(key)
+        if '_attribution' in data:
+            self.quota_history.observe(data)
+            data={k:v for k,v in data.items() if k!='_attribution'}
         previous=getattr(self,'data',None) or {}
         if previous.get('quotaAccountKey')!=key:
             self.last_quota_remaining=None;self.pending_settlement=None
@@ -619,11 +643,10 @@ class SidebarPlugin(Badge):
 
     def context_menu(self,hwnd,lparam):
         if not self.items:return
+        menu = getattr(self, 'context_process', None)
+        if menu is not None and menu.poll() is None:
+            return
         self.track_hover(False)
-        # The menu process can become the manager; its lifetime is not menu visibility.
-        now=time.monotonic()
-        if now-getattr(self,'last_context_open',0)<.45:return
-        self.last_context_open=now
         import subprocess,sys
         from pathlib import Path
         point=W.POINT();self.win.u.GetCursorPos(C.byref(point))
@@ -647,10 +670,11 @@ class SidebarPlugin(Badge):
                     and not self.win.u.IsIconic(self.target)
                     and foreground in (self.target,self.tooltip)))
         interactive=bool(active and (self.test_host or foreground in (self.target,self.tooltip)))
+        pointer_active=self.background_hover_hit()
         if interactive!=getattr(self,'interaction_mode',None):
             self.interaction_mode=interactive
             if interactive:self.set_hover_cadence(150)
-            else:
+            elif not pointer_active:
                 self.win.u.KillTimer(self.controller,2);self.hover_timer_ms=None
                 self.set_hover_tile(None);self.track_hover(False);self.activity_frame=False
         if active==getattr(self,'foreground_mode',None):return active
@@ -666,7 +690,7 @@ class SidebarPlugin(Badge):
                 self.last_resume_poll=time.monotonic()
             self.next_snapshot=0
             self.win.u.PostMessageW(self.controller,0x113,1,0)
-        else:
+        elif not pointer_active:
             self.set_hover_tile(None)
             self.track_hover(False);self.activity_frame=False
         return active
@@ -726,7 +750,7 @@ class SidebarPlugin(Badge):
         def worker():
             try:
                 from quota_badge import fetch_quota
-                quota=fetch_quota(account);usage=fetch_usage();error=None
+                quota=self.read_quota(account);usage=fetch_usage();error=None
             except Exception as exc:quota=usage=None;error=type(exc).__name__
             self.boundary_results.put((quota,usage,bool(local_active),bool(settlement),error,generation))
             self.win.u.PostMessageW(self.controller,0x8009,0,0)
@@ -857,6 +881,11 @@ class SidebarPlugin(Badge):
             if write_runtime_json(path,status):self.last_plugin_status=status
 
     def window_proc(self,hwnd,msg,wp,lp):
+        if msg==0x200 and hwnd in (self.hwnd,self.tooltip):
+            # Wake only the existing hover timer, never the network workers.
+            if self.background_hover_hit() and getattr(self,'hover_timer_ms',None) is None:
+                self.set_hover_cadence(150);self.poll_hover()
+            return 0
         if msg==0x800A:
             self.apply_reset_signal_result()
             return 0

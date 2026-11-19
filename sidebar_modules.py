@@ -175,6 +175,27 @@ class AccountQuotaHistory:
         """Forward only samples belonging to the explicitly selected account."""
         if (self._history is None or not isinstance(quota,dict)
                 or quota.get('quotaAccountKey')!=self.account_key):return
+        from quota_attribution import METHOD
+        incoming=quota.get('_attribution')
+        if isinstance(incoming,dict) and incoming.get('attributionMethod')==METHOD:
+            current=self._history.view()
+            if (incoming.get('lastAt')!=quota.get('updatedAt') or incoming.get('lastRemaining')!=quota.get('remaining')
+                    or incoming.get('reset')!=quota.get('resetsAt')):return
+            if current and current.get('lastAt',0)>incoming['lastAt']:return
+            if current==incoming:return
+            backup=self._history.path.with_suffix('.attribution-v1-backup.json')
+            if current and current.get('attributionMethod')!=METHOD and not backup.exists():
+                backup.write_bytes(self._history.path.read_bytes())
+            cycles=self._history.data['cycles']
+            if cycles and abs(cycles[-1]['reset']-incoming['reset'])<=120:cycles[-1]=incoming
+            else:cycles.append(incoming)
+            self._history.data['cycles']=cycles[-8:]
+            atomic_json(self._history.path,self._history.data)
+            return
+        if self._history.view() and self._history.view().get('attributionMethod')==METHOD:
+            # Existing UI heartbeats must not re-estimate an evidence ledger
+            # using unscoped provider counters or write unchanged data.
+            return
         # Provider-wide activity cannot establish which pooled account paid.
         # Without account-bound usage, retain the estimator's neutral/prior
         # allocation instead of attributing another account's activity here.

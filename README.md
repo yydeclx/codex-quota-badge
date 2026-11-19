@@ -8,7 +8,17 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.5.5](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.5)**
+> 当前最新版本：**[v1.5.7](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.7)**
+
+## v1.5.7 更新
+
+- Windows 连续右键只打开一个菜单，首次显示后再绘制阴影
+- 保留后台悬停和已完成请求的速度记录
+
+- 修复主副账号隔离后归因停留在五五分的问题，按账号额度端点和本机请求估算
+- 使用带身份校验的主账号响应额度、账号缓存历史和有界本机用量日志，不把第三方渠道调用计入 ChatGPT 额度
+- 历史缺口按同账号经验关系回推；保留低置信提示，仅本机/非本机两项整数，旧归因备份后重算
+- 额度读取优先使用本机网关的按账号接口，主副账号共享刷新限频
 
 ## v1.5.5 更新
 

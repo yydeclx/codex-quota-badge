@@ -55,6 +55,31 @@ class QuotaAccountSelectionTests(unittest.TestCase):
         self.assertIsNone(main['planType'])
         self.assertEqual(main['quotaScope'], 'selected-account')
 
+    def test_stale_main_uses_only_new_identity_and_window_matched_native_sample(self):
+        self.cache['mainPolicyQuota']={'identityKey':'a'*64}
+        self.cache['quotas']['__main__']['updatedAt']=(self.NOW-2000)*1000
+        self.cache['quotas']['secondary-fixture-A']['weeklyResetAt']=self.NOW+86400+3600
+        self.save()
+        observed={'at':self.NOW-30,'remaining':56,'reset':self.NOW+86400+1,'source':'native-response'}
+        with patch('quota_native_evidence.collect_native_samples',return_value=[observed]) as collect:
+            result=quota.fetch_quota()
+        self.assertEqual(result['remaining'],56);self.assertEqual(result['updatedAt'],self.NOW-30)
+        self.assertEqual(result['resetsAt'],self.NOW+86401)
+        self.assertEqual(result['quotaSource'],'native identity-matched quota response')
+        self.assertIsNone(result['fiveHour']);collect.assert_called_once()
+
+    def test_stale_secondary_or_ambiguous_week_never_uses_native_main_sample(self):
+        self.cache['mainPolicyQuota']={'identityKey':'a'*64}
+        for v in self.cache['quotas'].values():v['updatedAt']=(self.NOW-2000)*1000
+        self.save()
+        with patch('quota_native_evidence.collect_native_samples',side_effect=AssertionError('ambiguous account')):
+            for role in ('main','secondary'):
+                with self.assertRaises(ValueError):quota.fetch_quota(role)
+
+    def test_fresh_cache_does_not_trigger_native_fallback(self):
+        with patch('quota_native_evidence.collect_native_samples',side_effect=AssertionError('unnecessary read')):
+            self.assertEqual(quota.fetch_quota()['remaining'],63)
+
     def test_switch_back_keeps_history_key_and_does_not_refresh_observation(self):
         first = quota.fetch_quota()
         quota.fetch_quota('secondary')
@@ -220,8 +245,8 @@ class QuotaAccountSelectionTests(unittest.TestCase):
         with patch.object(Path, 'open', tracked_open):
             quota.fetch_quota()
             quota.fetch_quota('secondary')
-        self.assertEqual(reads, [('codex-quota-cache.json', 'rb'),
-                                ('config.json', 'rb'), ('codex-quota-cache.json', 'rb')])
+        self.assertEqual(reads, [('runtime-port.json','rb'),('codex-quota-cache.json', 'rb'),
+                                ('config.json', 'rb'),('runtime-port.json','rb'), ('codex-quota-cache.json', 'rb')])
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.root.iterdir()})
 
 

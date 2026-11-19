@@ -385,7 +385,9 @@ class Details:
             if day>dt.date.today():break
             labels=row['labels'];value=f"总 {labels['total']}% · 本机 {labels['local']}% · 非本机 {labels['other']}%" if row['total'] is not None else '暂无记录'
             self.label(body,f'{day:%m/%d}     {value}',11,bold=day==dt.date.today(),muted=row['total'] is None).pack(anchor='w',fill='x',pady=self.p(5))
-        self.card('记录范围',f"从 {dt.datetime.fromtimestamp(cycle['firstAt']):%m/%d %H:%M} 开始采样。\n归因估算：结合额度采样与本机用量/活动；断档按比例估算分配，非官方精确归因。"+(f"\n检测到 {cycle['corrections']} 次额度回调，已从消耗中扣减。" if cycle['corrections'] else ''))
+        note=cycle.get('attributionNote','结合额度采样与本机用量估算，非官方精确归因')
+        detail=(f"\n{cycle['attributionConfidence']}置信度 · {cycle.get('calibrationIntervals',0)} 个额度下降区间用于校准。" if cycle.get('attributionConfidence') else '')
+        self.card('记录范围',f"从 {dt.datetime.fromtimestamp(cycle['firstAt']):%m/%d %H:%M} 开始采样。\n归因估算：{note}。"+detail+(f"\n检测到 {cycle['corrections']} 次额度回调，已从消耗中扣减。" if cycle['corrections'] else ''))
     def diagnostics_page(self):
         snapshot=self.snapshot;quota=snapshot.get('quota') or {};cycle=snapshot.get('quotaHistory') or {};extra=snapshot.get('diagnostics') or {}
         runtime=self.runtime_status or {};sidebar=self.sidebar_status or {};usage=sidebar.get('usage') or {}
