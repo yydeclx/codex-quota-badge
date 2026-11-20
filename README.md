@@ -8,7 +8,11 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.5.7](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.7)**
+> 当前最新版本：**[v1.5.8](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.8)**
+
+## v1.5.8 更新
+
+- 优先保留额度变化前后的观测。至少有三个独立参照区间提供一致证据时，限制小请求可解释的异常大降幅。
 
 ## v1.5.7 更新
 

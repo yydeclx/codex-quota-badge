@@ -49,6 +49,22 @@ class AttributionTests(unittest.TestCase):
         c=estimate(quota,'__main__',{'__main__':[self.s()]},self.requests([(300,100,None)]))
         self.assertEqual(c['localUsed'],10);self.closed(c)
 
+    def test_small_local_request_during_large_shared_drop(self):
+        times = (300, 600, 900, 1200)
+        rows = [self.s(i, i * 300, 'native-response') for i in range(4)]
+        requests = self.requests([(at - 60, 100, None) for at in times])
+        cycle = estimate(self.q(13, 1200), '__main__', {'__main__': rows}, requests)
+        self.assertEqual((cycle['localUsed'], cycle['otherUsed']), (4, 9))
+        self.closed(cycle)
+
+    def test_history_pressure_keeps_drop_boundaries(self):
+        from quota_attribution import retain_samples
+        rows = [self.s(int(i >= 20), i * 60) for i in range(600)]
+        saved = retain_samples(rows)
+        self.assertEqual(len(saved), 256)
+        for i in (0, 19, 20, 599):
+            self.assertIn(rows[i], saved)
+
     def test_missing_data_has_no_fifty_fifty_prior(self):
         c=estimate(self.q(40),'main',{'main':[]},{'requests':[],'complete':False})
         self.assertEqual((c['localUsed'],c['otherUsed']),(0,40))

@@ -12,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path
+from statistics import median
 import threading
 
 from quota_accounting import number, date_at, _allocate, _units, _date_weights, add_points, apply_credit
@@ -99,6 +100,44 @@ def observation_source(quota):
             'opencodex live account quota':'live-account'}.get(quota.get('quotaSource'),'cache')
 
 
+def retain_samples(rows, limit=256):
+    """Prefer both sides of measured changes over redundant flat readings."""
+    if len(rows) <= limit:
+        return rows
+    keep = {0, len(rows) - 1}
+    for i in range(len(rows) - 1, 0, -1):
+        if rows[i]['remaining'] != rows[i - 1]['remaining']:
+            pair = {i, i - 1}
+            if len(keep | pair) <= limit:
+                keep.update(pair)
+    for i in range(len(rows) - 2, 0, -1):
+        if len(keep) >= limit:
+            break
+        keep.add(i)
+    return [rows[i] for i in sorted(keep)]
+
+
+def calibrated_limits(matches):
+    """Bound unusually large drops using independent, consistent observations."""
+    if len(matches) < 4:
+        return {}
+    limits = {}
+    for end, drop, work in matches:
+        if drop <= 1:
+            continue
+        rates = [d / w for at, d, w in matches if at != end]
+        typical = median(rates)
+        deviation = median(abs(rate - typical) for rate in rates)
+        # Broad dispersion gives no reliable independent reference.
+        if deviation > typical / 2:
+            continue
+        upper = (typical + 3 * deviation) * work
+        # Allow for integer quota readings at the two sampling boundaries.
+        if drop > upper + 1:
+            limits[end] = upper
+    return limits
+
+
 def estimate(quota, selected, accounts, request_data):
     """Rebuild only from raw samples and requests; old source percentages ignored."""
     reset,end=quota['resetsAt'],quota['updatedAt'];begin=reset-604800
@@ -107,6 +146,7 @@ def estimate(quota, selected, accounts, request_data):
     if not rows:raise ValueError('No account observation')
     requests=RequestIndex(request_data.get('requests',[]))
     intervals=[]; calibration_drop=calibration_work=0.; matched_intervals=0
+    matches = []
     calibration_pending=[];unscoped_calibrated=False
     for a,b in zip(rows,rows[1:]):
         start,stop=a['at'],b['at'];delta=max(0,a['remaining']-b['remaining'])
@@ -127,11 +167,14 @@ def estimate(quota, selected, accounts, request_data):
             calibration_work+=work
             if work:calibration_pending.append((stop,work))
             if delta and calibration_pending:
+                matches.append((stop, delta, sum(w for _, w in calibration_pending)))
                 calibration_drop+=delta;matched_intervals+=1
                 unscoped_calibrated=unscoped_calibrated or exclusive
                 calibration_pending=[]
         intervals.append({'start':start,'end':stop,'delta':a['remaining']-b['remaining'],'work':work,'days':days,'exclusive':exclusive,
                           'nativeMatch':native_match and covered and 0<stop-start<=900})
+    limits = calibrated_limits(matches)
+    calibration_drop -= sum(drop - limits[stop] for stop, drop, _ in matches if stop in limits)
     rate=calibration_drop/calibration_work if calibration_work and calibration_drop else 0
     # Historical unlabelled requests can only be extrapolated after an actual
     # uniquely correlated interval, not from the selected role/currentAccount.
@@ -170,6 +213,8 @@ def estimate(quota, selected, accounts, request_data):
             # Direct temporal correlation is stronger than extrapolating a
             # token coefficient; still an estimate, not a device billing proof.
             local=budget
+        if interval['end'] in limits:
+            local = min(local, _units(limits[interval['end']]))
         other=budget-local
         if local and days:
             for day,units in zip(days,_allocate(local,list(days.values()))):
@@ -259,7 +304,7 @@ def prepare(quota, home, storage):
             priority={'legacy-window':0,'native-response':1,'account-cache':2,'cache':3,'live-account':4}
             records.sort(key=lambda r:priority.get(r.get('source'),0))
             records=normalized(records,current_reset,max(end,stamp(current.get('updatedAt')) or end))
-            if len(records)>256:records=records[:1]+records[-255:]
+            records = retain_samples(records)
             accounts[ident]=records
             state.setdefault('accounts',{})[key]={'identity':account_identity,'samples':records,'bootstrapped':True}
         state['accounts']={hashlib.sha256(i.encode()).hexdigest():state['accounts'].get(hashlib.sha256(i.encode()).hexdigest(),{}) for i in ids}
