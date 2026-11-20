@@ -131,15 +131,19 @@ class SidebarPlugin(Badge):
             self.alpha_paint_pending=False;raise C.WinError(C.get_last_error())
 
     def row_usage(self,item):
-        if self.usage_error:
-            return None
         snapshot=self.usage
-        if not isinstance(snapshot,dict):return None
+        if not isinstance(snapshot,dict) or snapshot.get('date') != dt.date.today().isoformat():
+            return None
+        if self.usage_error:
+            # Display-only grace period, measured from the original successful read.
+            stamp = snapshot.get('updatedAt')
+            if not isinstance(stamp, (int, float)) or not 0 <= time.time() - stamp <= 900:
+                return None
         row=snapshot.get('providers',{}).get(item['provider'])
         if isinstance(row,dict):return row
-        # A successful snapshot with no provider row means confirmed zero.
-        # Keep the last successful snapshot visible while sleeping or while a
-        # wake-up refresh is in flight; only an explicit query failure shows —.
+        if snapshot.get('partial'):
+            return None
+        # A complete snapshot with no provider row means zero at sample time.
         return {'totalTokens':0,'requests':0,'reportedRequests':0,
                 'inputTokens':0,'outputTokens':0,'cachedInputTokens':0}
 
@@ -975,7 +979,9 @@ class SidebarPlugin(Badge):
         if msg==0x8003:
             try:
                 data,error=self.usage_results.get_nowait()
-                self.usage,self.usage_error,self.usage_busy=data,error,False
+                self.usage_error,self.usage_busy=error,False
+                if error is None and data is not None:
+                    self.usage=data
                 if data and not self.test_host:
                     try:
                         updated=sync_provider_items(self.config,data)

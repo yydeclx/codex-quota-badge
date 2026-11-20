@@ -71,12 +71,41 @@ class PowerTests(unittest.TestCase):
 
     def test_stale_successful_usage_remains_visible_during_wake_refresh(self):
         p=SidebarPlugin.__new__(SidebarPlugin);p.usage_error=None
-        p.usage={'date':'2026-10-22','updatedAt':1,'providers':{'OCX':{'totalTokens':12000000}}}
+        p.usage={'date':dt.date.today().isoformat(),'updatedAt':1,'providers':{'OCX':{'totalTokens':12000000}}}
         p.config={'refreshSeconds':60}
         self.assertEqual(p.row_usage({'provider':'OCX'})['totalTokens'],12000000)
         self.assertEqual(p.row_usage({'provider':'openai'})['totalTokens'],0)
         p.usage_error='TimeoutExpired'
         self.assertIsNone(p.row_usage({'provider':'OCX'}))
+
+    def test_failed_refresh_keeps_same_day_sample_through_restart(self):
+        import queue
+        p=self.make()
+        p.hwnd=1
+        p.config={'refreshSeconds':60}
+        today = dt.date.today()
+        stamp = dt.datetime.combine(today,dt.time(12)).timestamp()
+        p.usage={'date':today.isoformat(),'updatedAt':stamp,'providers':{'SKG':{'totalTokens':1234}}}
+        p.usage_results=queue.Queue()
+        p.request_repaint=MagicMock();p.update_tooltip=MagicMock();p.write_status=MagicMock()
+        p.usage_results.put((None,'TimeoutExpired'))
+        p.window_proc(1,0x8003,0,0)
+        with tempfile.TemporaryDirectory() as folder, patch('sidebar_plugin.CONFIG',Path(folder)/'config.json'):
+            Path(folder,'sidebar-status.json').write_text(json.dumps({'usage':p.usage,'usageError':p.usage_error}))
+            p.usage,p.usage_error=p.restore_last_usage()
+        with patch('sidebar_plugin.time.time',return_value=stamp+900):
+            self.assertEqual(p.row_usage({'provider':'SKG'})['totalTokens'],1234)
+        with patch('sidebar_plugin.time.time',return_value=stamp+901):
+            self.assertIsNone(p.row_usage({'provider':'SKG'}))
+        p.usage.update(date='2000-01-01')
+        with patch('sidebar_plugin.time.time',return_value=stamp+1):
+            self.assertIsNone(p.row_usage({'provider':'SKG'}))
+        p.test_host=True
+        p.usage_results.put(({'date':today.isoformat(),'updatedAt':stamp+902,
+                              'providers':{'SKG':{'totalTokens':2345}}},None))
+        p.window_proc(1,0x8003,0,0)
+        self.assertIsNone(p.usage_error)
+        self.assertEqual(p.row_usage({'provider':'SKG'})['totalTokens'],2345)
 
     def test_stale_successful_quota_remains_displayable_and_restores(self):
         now=dt.datetime.now().timestamp()

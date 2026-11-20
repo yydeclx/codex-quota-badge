@@ -8,7 +8,11 @@ Codex Quota Badge 是一个轻量的本地侧栏伴随工具，面向需要同�
 
 [下载最新版本](https://github.com/yydeclx/codex-quota-badge/releases/latest) · [查看更新记录](https://github.com/yydeclx/codex-quota-badge/releases) · [提交问题](https://github.com/yydeclx/codex-quota-badge/issues)
 
-> 当前最新版本：**[v1.5.8](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.8)**
+> 当前最新版本：**[v1.5.9](https://github.com/yydeclx/codex-quota-badge/releases/tag/v1.5.9)**
+
+## v1.5.9 更新
+
+- 今日 Token 数量短暂读取失败时，保留当天最近 15 分钟内的成功读数。读取恢复后自动更新。
 
 ## v1.5.8 更新
 
