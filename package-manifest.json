@@ -7,7 +7,6 @@
     "quota_attribution.py",
     "quota_evidence.py",
     "quota_native_evidence.py",
-    "patch_mode.py",
     "native_badge.py",
     "sidebar_plugin.py",
     "sidebar_compat.py",
@@ -24,6 +23,12 @@
     "sidebar_styles.py",
     "sidebar_telemetry.py",
     "live_metrics.py",
+    "session_usage.py",
+    "session_usage_card.py",
+    "session_usage_view.py",
+    "composer_usage.py",
+    "composer_anchor.py",
+    "composer_font.py",
     "sidebar_transparency.py",
     "sidebar_maintenance.py",
     "sidebar_supervisor.py",
@@ -51,11 +56,12 @@
     "README.md",
     "codex-monochrome.ico",
     "codex-original.ico",
-    "gateway-telemetry/deploy_gateway.py",
-    "gateway-telemetry/rollback.ps1",
-    "gateway-telemetry/local-telemetry-2.92.0.patch",
-    "gateway-telemetry/README.md",
-    "gateway-telemetry/LICENSE"
+    "composer-inline-validation/start-inline.ps1",
+    "composer-inline-validation/launch.py",
+    "composer-inline-validation/devtools_pipe.py",
+    "composer-inline-validation/usage_bridge.py",
+    "composer-inline-validation/legacy-widget.js",
+    "composer-inline-validation/codex-host.js"
   ],
   "preservedFiles": [
     "sidebar-config.json",
@@ -64,12 +70,13 @@
     "quota-history.json",
     "quota-alert-state.json",
     "connection-history.json",
+    "session-usage-selection.json",
     "reset-signals.json",
     "status.json",
     "sidebar-status.json",
     "update-status.json"
   ],
-  "version": "1.5.9",
+  "version": "2.0.0",
   "directories": [
     ".codex-plugin",
     "skills"

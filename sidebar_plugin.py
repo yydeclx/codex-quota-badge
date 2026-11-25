@@ -9,9 +9,12 @@ import threading
 import time
 from native_badge import Badge, rgb, write_runtime_json
 from sidebar_data import CONFIG, load_config, save_config, fetch_usage, item_usage, compact_tokens, sync_provider_items
-from tooltip_card import render_usage_card, upload
+from tooltip_card import LayeredSurface, render_usage_card, upload
+from composer_usage import ANCHOR_READY, ANCHOR_WAKE_TIMER, FADE_TIME, POPUP_TRAVEL, animations_enabled, ease
 
 from version import PLUGIN_VERSION
+
+TOOLTIP_OPEN_TIMER = 4  # controller window only
 
 def breathing_level(now):
     """Return a restrained, smooth activity alpha for the running dot."""
@@ -58,6 +61,10 @@ class SidebarPlugin(Badge):
         self.next_update_check=time.time()+60;self.update_busy=False;self.update_check_seconds=21600;self.update_results=queue.Queue()
         cycle=self.quota_history.view() or {};self.last_quota_remaining=cycle.get('lastRemaining')
         self.hover_item=None
+        from composer_usage import ComposerUsage
+        from session_usage_view import SessionUsageMonitor
+        self.composer_usage=ComposerUsage(self,SessionUsageMonitor(
+            follow_visible=True,on_result=self.schedule_composer_refresh))
         super().__init__(test_host)
         self.refresh_usage()
         # Monthly history is secondary to the badge and is fetched by the
@@ -69,7 +76,31 @@ class SidebarPlugin(Badge):
 
     @property
     def items(self):
-        return [i for i in self.config['items'] if i.get('enabled',True) and i['id'] not in self.compact_rows.hidden]
+        return [i for i in self.config['items'] if i['type']!='session_usage' and i.get('enabled',True) and i['id'] not in self.compact_rows.hidden]
+
+    def composer_usage_enabled(self):
+        from sidebar_data import composer_enabled
+        return composer_enabled(self.config) and not self.inline_composer_owns_target()
+
+    def inline_composer_owns_target(self):
+        if not getattr(self,'target',None) or getattr(self,'test_host',None):return False
+        root=os.environ.get('LOCALAPPDATA')
+        if not root:return False
+        now=time.monotonic()
+        if now>=getattr(self,'next_inline_lease_read',0):
+            from pathlib import Path
+            self.next_inline_lease_read=now+.5
+            self.inline_lease={}
+            try:
+                with (Path(root)/'CodexComposerInline'/'lease.json').open(encoding='utf-8') as f:
+                    lease=json.loads(f.read(1024))
+                if isinstance(lease,dict):self.inline_lease=lease
+            except (OSError,ValueError):pass
+        lease=self.inline_lease
+        expiry=lease.get('expires')
+        if type(expiry) not in (int,float) or not 0<expiry-time.time()<=8:return False
+        pid=W.DWORD()
+        return bool(self.win.u.GetWindowThreadProcessId(self.target,C.byref(pid)) and pid.value==lease.get('pid'))
 
     def item_height(self,item):
         if item['type']=='weekly_quota':
@@ -222,7 +253,8 @@ class SidebarPlugin(Badge):
             if item['type'] not in ('weekly_quota','opencodex_today'):
                 from sidebar_styles import draw_module
                 from sidebar_modules import module_value
-                draw_module(self.win,dc,s,y,item['type'],module_value(item['type'],self.modules.view(),self.config),tuple((self.bg >> (8*n)) & 255 for n in range(3)))
+                value=module_value(item['type'],self.modules.view(),self.config)
+                draw_module(self.win,dc,s,y,item['type'],value,tuple((self.bg >> (8*n)) & 255 for n in range(3)))
                 continue
             if item['type']=='weekly_quota':
                 origin=W.POINT()
@@ -309,9 +341,10 @@ class SidebarPlugin(Badge):
 
     def refresh_visible_metrics(self,now):
         """Repaint a visible Token card even when the pointer never moves."""
-        if not getattr(self,'config',{}).get('realtimeMetricsEnabled',True):return
-        if not self.tooltip_active or not self.hover_item:return
-        if self.selected_item()['type']!='opencodex_today':return
+        if not getattr(self,'tooltip_active',False) or not getattr(self,'hover_item',None):return
+        kind=self.selected_item()['type']
+        if kind!='opencodex_today':return
+        if not getattr(self,'foreground_mode',True) or not getattr(self,'config',{}).get('realtimeMetricsEnabled',True):return
         if now<getattr(self,'next_metrics_paint',0):return
         self.next_metrics_paint=now+.25
         self.update_tooltip()
@@ -332,6 +365,10 @@ class SidebarPlugin(Badge):
         return hit==self.hwnd or bool(getattr(self,'tooltip_active',False) and hit==self.tooltip)
 
     def poll_hover(self):
+        composer=getattr(self,'composer_usage',None)
+        if composer and not self.test_host and self.composer_usage_enabled() and self.composer_foreground():
+            if composer.anchor_due(time.monotonic()):self.refresh_composer()
+            if composer.rect:composer.poll_pointer()
         if not getattr(self,'interaction_mode',True) and not self.background_hover_hit():
             self.win.u.KillTimer(self.controller,2);self.hover_timer_ms=None
             self.set_hover_tile(None);self.track_hover(False);return
@@ -374,7 +411,7 @@ class SidebarPlugin(Badge):
                 if bounds.left<=point.x<bounds.right and bounds.top<=point.y<bounds.bottom and index>=0:item=self.items[index]['id']
         self.set_hover_tile(item)
         if getattr(self,'menu_active',False):return
-        if getattr(self,'foreground_mode',True) and self.config.get('realtimeMetricsEnabled',True):self.refresh_visible_metrics(now)
+        self.refresh_visible_metrics(now)
         if self.tooltip_active and self.tooltip:
             cursor,tip=W.POINT(),W.RECT()
             self.win.u.GetCursorPos(C.byref(cursor));self.win.u.GetWindowRect(self.tooltip,C.byref(tip))
@@ -430,9 +467,66 @@ class SidebarPlugin(Badge):
         index=self.index_at(position,len(self.items)-1)
         item=self.items[index]
         if self.hover_item!=item['id']:
+            self.track_hover(False)
             self.hover_item=item['id'];self.hover_focus=None;self.hover_offset=0;self.last_tooltip_text=None
-        self.update_tooltip(force=True);self.position_tooltip();self.win.u.ShowWindow(self.tooltip,4)
-        self.tooltip_active=True;self.hover_since=time.monotonic()
+        self.open_tooltip();self.hover_since=time.monotonic()
+
+    def create_tooltip(self):
+        self.stop_tooltip_opening()
+        super().create_tooltip()
+
+    def track_hover(self,inside,now=None):
+        if not inside:self.stop_tooltip_opening()
+        super().track_hover(inside,now)
+
+    def open_tooltip(self):
+        if self.tooltip_active:
+            self.update_tooltip(force=True)
+            return
+        if not getattr(self,'controller',None) or not animations_enabled(self.win):
+            super().open_tooltip()
+            return
+        self.update_tooltip(force=True)
+        try:
+            surface=LayeredSurface(self.win,self.tooltip_surface)
+            self.tooltip_opening=(time.monotonic(),surface)
+            self.paint_tooltip_opening(progress=0)
+            self.win.u.ShowWindow(self.tooltip,4)
+            self.tooltip_active=True
+            if not self.win.u.SetTimer(self.controller,TOOLTIP_OPEN_TIMER,15,None):
+                self.paint_tooltip_opening(progress=1)
+        except Exception:
+            self.stop_tooltip_opening()
+            super().open_tooltip()
+
+    def stop_tooltip_opening(self):
+        opening=getattr(self,'tooltip_opening',None)
+        if not opening:return
+        self.tooltip_opening=None
+        self.win.u.KillTimer(self.controller,TOOLTIP_OPEN_TIMER)
+        opening[1].close()
+
+    def paint_tooltip_opening(self,progress=None):
+        opening=getattr(self,'tooltip_opening',None)
+        if not opening:return
+        start,surface=opening
+        if progress is None:progress=min(1.,(time.monotonic()-start)/FADE_TIME)
+        alpha=ease(progress)
+        x,y=self.tooltip_anchor((surface.size.cx,surface.size.cy))
+        slide=round((1-alpha)*POPUP_TRAVEL*self.scale)
+        surface.present(self.tooltip,round(255*alpha),(x-slide,y))
+        if progress>=1:self.stop_tooltip_opening()
+
+    def present_tooltip(self):
+        opening=getattr(self,'tooltip_opening',None)
+        if opening:
+            surface=LayeredSurface(self.win,self.tooltip_surface)
+            self.tooltip_opening=(opening[0],surface)
+            opening[1].close()
+            self.paint_tooltip_opening()
+        else:
+            upload(self.win,self.tooltip,self.tooltip_surface)
+            if self.tooltip_active:self.position_tooltip()
 
     def update_tooltip(self,force=False):
         if not force and not self.tooltip_active:return
@@ -456,8 +550,7 @@ class SidebarPlugin(Badge):
             key=(item['id'],remaining,reset,str(five_hour),plan_type,str(cache_cycle),str(reset_signal),countdown_tick,focus,self.scale,dt.date.today())
             if key!=self.last_tooltip_text:
                 self.tooltip_surface,self.quota_actions=render_quota_chart(self.scale,remaining,reset,cycle,focus,dt.date.today().isoformat(),five_hour,plan_type,reset_signal,sample_at=self.data.get('updatedAt') if valid else None)
-                upload(self.win,self.tooltip,self.tooltip_surface);self.last_tooltip_text=key
-                if self.tooltip_active:self.position_tooltip()
+                self.present_tooltip();self.last_tooltip_text=key
             self.hover_actions=getattr(self,'quota_actions',[])
             return
         if item['type']!='opencodex_today':
@@ -481,8 +574,7 @@ class SidebarPlugin(Badge):
             key=(item['id'],str(rows),offset,getattr(self,'hover_focus',None),self.scale)
             if key!=self.last_tooltip_text:
                 self.tooltip_surface,self.hover_actions=render_panel(self.scale,item['label'],shown,getattr(self,'hover_focus',None),f'{offset+1}–{min(offset+6,len(rows))} / {len(rows)} · 滚轮翻阅' if len(rows)>6 else '')
-                upload(self.win,self.tooltip,self.tooltip_surface);self.last_tooltip_text=key
-                if self.tooltip_active:self.position_tooltip()
+                self.present_tooltip();self.last_tooltip_text=key
             return
         self.hover_actions=[]
         row=self.row_usage(item)
@@ -564,22 +656,26 @@ class SidebarPlugin(Badge):
                 self.tooltip_surface=combined
                 self.token_links=[((r[0],r[1]+panel_y/self.scale,r[2],r[3]+panel_y/self.scale),action) for r,action in actions]
                 self.hover_actions=[a for a in self.hover_actions if a[1][0]=='day']+self.token_links
-            upload(self.win,self.tooltip,self.tooltip_surface)
+            self.present_tooltip()
             self.last_tooltip_text=key
-            if self.tooltip_active:self.position_tooltip()
 
-    def position_tooltip(self):
+    def tooltip_anchor(self,size):
         # Compute the selected row's final anchor before touching the window.
         # The base implementation centers on the whole badge; calling it first
         # moved a visible popup twice on every live metrics/hover repaint.
-        tip,badge,host=W.RECT(),W.RECT(),W.RECT()
-        self.win.u.GetWindowRect(self.tooltip,C.byref(tip));self.win.u.GetWindowRect(self.hwnd,C.byref(badge))
+        badge,host=W.RECT(),W.RECT()
+        self.win.u.GetWindowRect(self.hwnd,C.byref(badge))
         self.win.u.GetWindowRect(self.target,C.byref(host))
         index=self.items.index(self.selected_item())
         center=badge.top+round((self.row_top(index)+self.item_height(self.items[index])/2)*self.scale)
-        width,height=tip.right-tip.left,tip.bottom-tip.top;gap=round(8*self.scale)
+        width,height=size;gap=round(8*self.scale)
         x=min(badge.right+gap,host.right-width-gap)
         y=max(host.top+gap,min(center-height//2,host.bottom-height-gap))
+        return x,y
+
+    def position_tooltip(self):
+        tip=W.RECT();self.win.u.GetWindowRect(self.tooltip,C.byref(tip))
+        x,y=self.tooltip_anchor((tip.right-tip.left,tip.bottom-tip.top))
         if (tip.left,tip.top)!=(x,y):
             self.win.u.SetWindowPos(self.tooltip,W.HWND(-1),x,y,0,0,0x1|0x10)
 
@@ -663,17 +759,55 @@ class SidebarPlugin(Badge):
 
     def window_event(self,hook,event,hwnd,obj,child,thread,stamp):
         super().window_event(hook,event,hwnd,obj,child,thread,stamp)
-        if event==3 and getattr(self,'power_ready',False) and not self.closing:
-            # Queue on the UI message loop rather than refresh inside the WinEvent callback.
+        if not getattr(self,'power_ready',False) or self.closing:return
+        if event==3:
+            # Queue on the UI message loop rather than refresh inside WinEvent.
             self.win.u.PostMessageW(self.controller,0x8006,0,0)
+        elif event in (0x8001,0x8002,0x8003,0x800B) and hwnd==self.target and obj==0 and child==0:
+            self.schedule_composer_refresh()
+        elif event in (0x8001,0x8002,0x8003,0x8004,0x8005,0x8006,0x8007,0x8008,0x8009,0x800B):
+            composer=getattr(self,'composer_usage',None)
+            if (composer and self.target and hwnd and not self.test_host and self.composer_usage_enabled()
+                    and self.win.u.GetAncestor(hwnd,2)==self.target and self.composer_foreground()):
+                composer.navigation_hint()
+                self.arm_composer_wake(composer)
+
+    def arm_composer_wake(self, composer):
+        delay=composer.anchor_wake_delay(time.monotonic())
+        if delay is not None and not getattr(self,'composer_wake_armed',False):
+            self.composer_wake_armed=bool(self.win.u.SetTimer(self.controller,ANCHOR_WAKE_TIMER,delay,None))
+
+    def schedule_composer_refresh(self):
+        if getattr(self,'controller',None) and not self.closing:
+            self.win.u.PostMessageW(self.controller,ANCHOR_READY,0,0)
+
+    def composer_foreground(self, foreground=None):
+        foreground=self.win.u.GetForegroundWindow() if foreground is None else foreground
+        return bool(foreground and self.target and (foreground in (self.target,self.tooltip)
+                    or self.win.u.GetAncestor(foreground,2)==self.target))
+
+    def refresh_composer(self):
+        composer=getattr(self,'composer_usage',None)
+        if not composer:return
+        if self.test_host or not self.composer_usage_enabled():
+            if composer.host:composer.destroy()
+        elif self.composer_foreground():
+            composer.refresh(self.target)
+            self.arm_composer_wake(composer)
+        elif composer.host:
+            composer.suspend()
 
     def sync_power_mode(self):
         foreground=self.win.u.GetForegroundWindow()
+        composer=getattr(self,'composer_usage',None)
+        host_foreground=self.composer_foreground(foreground) if composer else foreground in (self.target,self.tooltip)
+        if composer and composer.host and not host_foreground and not self.test_host:
+            composer.suspend()
         from ui_presence import is_companion
         active=bool(self.test_host or is_companion(foreground) or (self.target and self.win.u.IsWindow(self.target)
                     and not self.win.u.IsIconic(self.target)
-                    and foreground in (self.target,self.tooltip)))
-        interactive=bool(active and (self.test_host or foreground in (self.target,self.tooltip)))
+                    and host_foreground))
+        interactive=bool(active and (self.test_host or host_foreground))
         pointer_active=self.background_hover_hit()
         if interactive!=getattr(self,'interaction_mode',None):
             self.interaction_mode=interactive
@@ -818,6 +952,7 @@ class SidebarPlugin(Badge):
         if self.config.get('activityEnabled',True):self.monitor_gpt_boundary()
         try:self.reload_config()
         except OSError:self.config_error='配置文件暂不可读，保留上次有效配置'
+        self.refresh_composer()
         if time.time()>=self.next_usage and not self.usage_busy:self.refresh_usage()
         if time.time()>=self.next_month and not self.month_busy:self.refresh_month()
         if not self.test_host and time.time()>=self.next_maintenance:
@@ -880,15 +1015,44 @@ class SidebarPlugin(Badge):
         status={'version':1,'items':self.items,'quotaStyle':self.config.get('quotaStyle'),'usage':self.usage,'usageError':self.usage_error,'configError':self.config_error,
                 'refreshSeconds':self.config['refreshSeconds'],'boundaryBusy':self.boundary_busy,'lastCompleteSample':self.last_complete_sample,
                 'activitySource':getattr(self.activity,'source',None),'realtimeMetricsEnabled':self.config.get('realtimeMetricsEnabled',True),'pluginVersion':PLUGIN_VERSION}
+        composer=getattr(self,'composer_usage',None)
+        if composer and self.composer_usage_enabled():
+            status['composerUsage']=composer.status()
+        elif composer and self.inline_composer_owns_target():
+            status['composerUsage']={'mode':'inline'}
         if status!=getattr(self,'last_plugin_status',None):
             path=CONFIG.with_name('test-sidebar-status.json' if self.test_host else 'sidebar-status.json')
             if write_runtime_json(path,status):self.last_plugin_status=status
 
     def window_proc(self,hwnd,msg,wp,lp):
+        if msg==0x113 and wp==TOOLTIP_OPEN_TIMER and hwnd==getattr(self,'controller',None):
+            try:self.paint_tooltip_opening()
+            except Exception:
+                self.track_hover(False);self.log_error()
+            return 0
+        composer=getattr(self,'composer_usage',None)
+        if composer:
+            try:
+                result=composer.handle(hwnd,msg,wp,lp)
+                if result is not None:return result
+            except Exception:
+                composer.hide();self.log_error()
+                return 0
         if msg==0x200 and hwnd in (self.hwnd,self.tooltip):
             # Wake only the existing hover timer, never the network workers.
             if self.background_hover_hit() and getattr(self,'hover_timer_ms',None) is None:
                 self.set_hover_cadence(150);self.poll_hover()
+            return 0
+        if (msg==ANCHOR_READY or (msg==0x113 and wp==ANCHOR_WAKE_TIMER)) and hwnd==self.controller:
+            if msg==0x113:
+                self.win.u.KillTimer(self.controller,wp)
+                self.composer_wake_armed=False
+            if not self.closing:
+                try:
+                    before=composer.status() if composer else None
+                    self.refresh_composer()
+                    if composer and before!=composer.status():self.write_status()
+                except Exception:self.log_error()
             return 0
         if msg==0x800A:
             self.apply_reset_signal_result()
@@ -947,7 +1111,11 @@ class SidebarPlugin(Badge):
             self.win.u.EndPaint(hwnd,C.byref(ps))
             return 0
         if msg==0x8006:
-            if getattr(self,'power_ready',False):self.sync_power_mode()
+            if getattr(self,'power_ready',False):
+                before=composer.status() if composer else None
+                self.sync_power_mode()
+                self.refresh_composer()
+                if composer and before!=composer.status():self.write_status()
             return 0
         if hwnd==self.tooltip:
             if msg==0x202:
@@ -1020,13 +1188,14 @@ class SidebarPlugin(Badge):
 
     def open_details(self):
         if not self.items:return
-        self.track_hover(False)
         import subprocess,sys
         from pathlib import Path
         point=W.POINT();bounds=W.RECT();self.win.u.GetCursorPos(C.byref(point));self.win.u.GetWindowRect(self.hwnd,C.byref(bounds))
         position=(point.y-bounds.top)/self.scale
         index=self.index_at(position,len(self.items)-1)
-        item=self.items[index];section='chain' if item['type']=='opencodex_today' else item['type']
+        item=self.items[index]
+        self.track_hover(False)
+        section='chain' if item['type']=='opencodex_today' else item['type']
         self.publish_details()
         self.next_snapshot=time.time()+2
         from sidebar_modules import atomic_json
@@ -1039,6 +1208,12 @@ class SidebarPlugin(Badge):
         from interaction_runtime import trace
         trace('details_launch',section=section)
         self.details_process=subprocess.Popen([str(Path(sys.executable).with_name('pythonw.exe')),str(CONFIG.with_name('sidebar_details.py')),section,item.get('provider','openai')],creationflags=subprocess.CREATE_NO_WINDOW)
+
+    def close(self):
+        self.stop_tooltip_opening()
+        composer=getattr(self,'composer_usage',None)
+        if composer:composer.destroy()
+        super().close()
 
 
 if __name__=='__main__':

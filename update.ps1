@@ -35,10 +35,11 @@ $python = $pythonCommand.Source
 $programFiles = @(
     'version.py', 'quota_badge.py', 'quota_styles.py', 'native_badge.py',
     'sidebar_plugin.py', 'sidebar_compat.py', 'window_mode.py', 'sidebar_activity.py', 'sidebar_context.py',
-    'font_fallback.py', 'quota_accounting.py', 'quota_attribution.py', 'quota_evidence.py', 'quota_native_evidence.py', 'patch_mode.py',
+    'font_fallback.py', 'quota_accounting.py', 'quota_attribution.py', 'quota_evidence.py', 'quota_native_evidence.py',
     'sidebar_data.py', 'sidebar_details.py', 'sidebar_manager.py',
     'sidebar_modules.py', 'sidebar_options.py', 'sidebar_startup.py',
     'sidebar_styles.py', 'sidebar_telemetry.py','live_metrics.py', 'sidebar_transparency.py',
+    'session_usage.py', 'session_usage_card.py', 'session_usage_view.py', 'composer_usage.py', 'composer_anchor.py', 'composer_font.py',
     'tooltip_card.py', 'hover_panel.py', 'interaction_runtime.py',
     'sidebar_maintenance.py',
     'sidebar_supervisor.py',
@@ -49,9 +50,12 @@ $programFiles = @(
     'manage.py', 'start.ps1', 'manage.ps1', 'start-polling-backup.ps1',
     'install.ps1', 'update.ps1', 'PORTABLE-INSTALL.md', 'README.md',
     'codex-monochrome.ico', 'codex-original.ico', 'package-manifest.json',
-    'gateway-telemetry/deploy_gateway.py', 'gateway-telemetry/rollback.ps1',
-    'gateway-telemetry/local-telemetry-2.92.0.patch', 'gateway-telemetry/README.md',
-    'gateway-telemetry/LICENSE'
+    'composer-inline-validation/start-inline.ps1',
+    'composer-inline-validation/launch.py',
+    'composer-inline-validation/devtools_pipe.py',
+    'composer-inline-validation/usage_bridge.py',
+    'composer-inline-validation/legacy-widget.js',
+    'composer-inline-validation/codex-host.js'
 )
 $programDirectories = @('.codex-plugin', 'skills')
 

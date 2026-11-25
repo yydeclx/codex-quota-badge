@@ -489,15 +489,18 @@ class Badge:
             if self.hover_since is None:
                 self.hover_since = now
             elif now-self.hover_since >= .25 and not self.tooltip_active and self.tooltip:
-                self.update_tooltip(force=True)
-                self.position_tooltip()
-                self.win.u.ShowWindow(self.tooltip,4)
-                self.tooltip_active = True
+                self.open_tooltip()
         else:
             self.hover_since = None
             if self.tooltip_active and self.tooltip:
                 self.win.u.ShowWindow(self.tooltip,0)
             self.tooltip_active = False
+
+    def open_tooltip(self):
+        self.update_tooltip(force=True)
+        self.position_tooltip()
+        self.win.u.ShowWindow(self.tooltip,4)
+        self.tooltip_active = True
 
     def poll_hover(self):
         inside = False

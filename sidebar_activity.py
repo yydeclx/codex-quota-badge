@@ -70,6 +70,9 @@ def _read_logs(home=None):
 
 def read_activity(home=None):
     try:return read_local(ACTIVITY_PATH,home)
+    except FileNotFoundError:
+        # A standalone Codex install is normal. Retry discovery later without a failure indicator.
+        return {**activity_from_logs({'logs':[]}), 'source':'opencodex-unavailable'}
     except RuntimeError as exc:
         if str(exc) not in ('HTTP_401','HTTP_404'):raise
         return _read_logs(home)
@@ -192,8 +195,8 @@ class ProviderActivity:
             age=max(0,self.clock()-self.received)
             fresh=self.snapshot is not None and age<=MAX_SAMPLE_AGE
             live=fresh and self.snapshot['supportsLive']
-            rows=[dict(r) for r in self.snapshot['requests'] if r.get('provider')==provider] if live else []
-            finished=[dict(r) for r in self.snapshot['finishedRequests'] if r.get('provider')==provider] if live else []
+            rows=[dict(r) for r in self.snapshot['requests'] if provider is None or r.get('provider')==provider] if live else []
+            finished=[dict(r) for r in self.snapshot['finishedRequests'] if provider is None or r.get('provider')==provider] if live else []
             return {'requests':rows,'finishedRequests':finished,'events':[dict(r) for r in self.events],
                     'available':fresh,'supportsLive':bool(live),'stale':bool(fresh and self.error),
                     'detailed':live and self.snapshot.get('schemaVersion')==3,

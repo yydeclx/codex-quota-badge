@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话用量 · 输入框内嵌原型</title>
+<link rel="stylesheet" href="preview.css">
+<body>
+  <header>
+    <div><strong>输入框内嵌原型</strong><span class="badge">独立预览 · 示例数据</span></div>
+    <label><input id="enabled" type="checkbox" checked> 显示底栏</label>
+  </header>
+  <div class="shell">
+    <nav aria-label="切换场景">
+      <button type="button" data-route="draft">新聊天</button>
+      <button type="button" data-route="new-start">新聊天 · 启动中</button>
+      <button type="button" data-route="a">会话 A</button>
+      <button type="button" data-route="a-start">会话 A · 等待速度</button>
+      <button type="button" id="finish-turn" disabled>模拟本轮完成</button>
+      <button type="button" data-route="b">会话 B（较慢）</button>
+      <button type="button" data-route="split">分屏</button>
+      <button type="button" data-route="file">文件全屏</button>
+      <button type="button" id="load-view">打开本机用量 JSON</button>
+      <input id="view-file" type="file" accept=".json,application/json" hidden>
+      <span id="view-error" role="status"></span>
+    </nav>
+    <main id="workspace"></main>
+  </div>
+  <template id="composer">
+    <div class="composer">
+      <textarea aria-label="示例输入框" placeholder="和 Codex 一起工作" rows="2"></textarea>
+      <div class="toolbar">
+        <div class="left">＋　完全访问</div>
+        <div class="slot"></div>
+        <div class="right"><span>6.2 Sol</span><button class="send" type="button" aria-label="示例发送按钮" disabled>↑</button></div>
+      </div>
+    </div>
+  </template>
+  <script src="inline-usage.js"></script>
+  <script>
+    const workspace = document.querySelector('#workspace');
+    const composer = document.querySelector('#composer');
+    const finishTurn = document.querySelector('#finish-turn');
+    const examples = {
+      a: {session: 'a', turn_state: 'completed', metrics: {speed: '56 tok/s', context: '11%', cache: '45.4%', timing: '首字 2.14s', context_total: '17,228 / 160k', last_cache: '本步 87.2%', total_input: '33k', total_output: '2.1k'}},
+      b: {session: 'b', turn_state: 'active', metrics: {speed: '103 tok/s', context: '38%', cache: '62.7%', timing: '首字 1.62s', context_total: '60,800 / 160k', last_cache: '本步 78.2%', total_input: '218k', total_output: '9.8k'}},
+    };
+    examples['a-start'] = {...examples.a, session: 'a-start', turn_state: 'active',
+      metrics: {...examples.a.metrics, speed_label: '上次输出速度'}};
+    let imported;
+    const inline = mountInlineUsage(workspace, {
+      resolveSlot: root => root.querySelector('.pane[data-main] .toolbar > .slot'),
+      // Deliberately deliver old requests late to exercise identity protection.
+      readView: id => id === imported?.session ? imported : new Promise(resolve => setTimeout(() => resolve(examples[id]), id === 'b' ? 650 : 45)),
+    });
+    function makePane(title, main, room, model) {
+      const pane = document.createElement('article'); pane.className = 'pane';
+      pane.toggleAttribute('data-main', main);
+      const heading = document.createElement('h1'); heading.textContent = title;
+      const intro = document.createElement('p'); intro.textContent = main ? '切换左侧场景，或拖动窗口边缘观察底栏是否仍在空白区居中。' : '辅助输入框不挂载会话用量。';
+      pane.append(heading, intro, composer.content.cloneNode(true));
+      pane.style.setProperty('--bottom', room);
+      pane.querySelector('.right span').textContent = model;
+      if (title === '新聊天') pane.querySelector('textarea').placeholder = '随心输入';
+      return pane;
+    }
+    function navigate(route) {
+      finishTurn.disabled = route !== 'a-start';
+      for (const button of document.querySelectorAll('[data-route]')) button.setAttribute('aria-pressed', String(button.dataset.route === route));
+      workspace.classList.toggle('split', route === 'split');
+      if (route === 'file') {
+        workspace.replaceChildren(makePane('文件全屏', false, '18px', '辅助输入'));
+        inline.setContext(null);
+        return;
+      }
+      const draft = route === 'draft', b = route === 'b';
+      const newStart = route === 'new-start', oldStart = route === 'a-start';
+      const main = makePane(draft || newStart ? '新聊天' : b ? '会话 B' : route === 'import' ? '本机用量快照' : '会话 A', true, b ? '70px' : '24px', b ? '6.2 Astra 高' : '6.2 Sol');
+      workspace.replaceChildren(main);
+      if (route === 'split') workspace.append(makePane('右侧辅助会话', false, '45px', '辅助输入'));
+      inline.setContext(draft ? {draft: true} : newStart ? {newChat: true, starting: true} :
+        {id: route === 'import' ? imported.session : b ? 'b' : oldStart ? 'a-start' : 'a', starting: oldStart});
+    }
+    document.querySelector('nav').addEventListener('click', e => { if (e.target.dataset.route) navigate(e.target.dataset.route); });
+    finishTurn.addEventListener('click', () => {
+      inline.updateView({...examples.a, session: 'a-start', metrics: {...examples.a.metrics, speed: '61 tok/s'}});
+      finishTurn.disabled = true;
+    });
+    document.querySelector('#enabled').addEventListener('change', e => inline.setEnabled(e.target.checked));
+    const file = document.querySelector('#view-file');
+    document.querySelector('#load-view').addEventListener('click', () => file.click());
+    file.addEventListener('change', async () => {
+      const selected = file.files[0];
+      if (!selected) return;
+      const status = document.querySelector('#view-error');
+      try {
+        if (selected.size > 32 * 1024) throw new Error('file too large');
+        const view = JSON.parse(await selected.text());
+        if (!view || typeof view.session !== 'string' || !/^[A-Za-z0-9_-]{3,128}$/.test(view.session)) throw new Error('not a usage view');
+        imported = view;
+        status.textContent = '';
+        navigate('import');
+      } catch {
+        status.textContent = '无法读取用量。请选择本原型导出的 JSON。';
+      } finally {
+        file.value = '';
+      }
+    });
+    navigate('draft');
+  </script>
+</body>
+</html>

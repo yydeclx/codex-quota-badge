@@ -19,7 +19,7 @@ class NativePopupTests(unittest.TestCase):
         from sidebar_compat import CompatibleSidebar
         from sidebar_transparency import present
         w=Win()
-        # No network, timers, account readers, foreground changes or live files.
+        # No network, account readers, foreground changes or live files.
         b=CompatibleSidebar.__new__(CompatibleSidebar);b.win=w;b.test_host=True
         b.target=None;b.hwnd=None;b.tooltip=None;b.geometry=None;b.location_hook=None
         b.layout_events=0;b.closing=False;b.config={'style':'01','quotaStyle':'01',
@@ -53,6 +53,9 @@ class NativePopupTests(unittest.TestCase):
             self.fail('Native WinEvent state did not settle: '+str(hook_events[-12:]))
         wc=WNDCLASS(8,b.proc,0,0,w.instance,None,None,None,None,'CodexQuotaNativeV2')
         self.assertTrue(w.u.RegisterClassW(C.byref(wc)))
+        b.controller=w.u.CreateWindowExW(0,wc.lpszClassName,'Isolated card timer',0,
+                                         0,0,0,0,W.HWND(-3),None,w.instance,None)
+        self.assertTrue(b.controller)
         temp=tempfile.TemporaryDirectory(prefix='quota-native-popup-')
         ready=Path(temp.name)/'host.txt'
         # The production WinEvent hook skips its own process. A separate inert
@@ -109,10 +112,18 @@ finally:
                 return True
             with patch.object(w.u,'GetCursorPos',side_effect=cursor), \
                  patch.object(w.u,'GetForegroundWindow',return_value=host), \
-                 patch.object(w.u,'WindowFromPoint',return_value=b.hwnd):
+                 patch.object(w.u,'WindowFromPoint',return_value=b.hwnd), \
+                 patch('sidebar_plugin.animations_enabled',return_value=True):
                 Badge.poll_hover(b);b.hover_since=time.monotonic()-.5;Badge.poll_hover(b)
                 self.assertTrue(b.tooltip_active);self.assertTrue(w.u.IsWindowVisible(b.tooltip))
                 self.assertGreater(b.tooltip_surface.width,rect.right)
+                self.assertIsNotNone(b.tooltip_opening)
+                initial=W.RECT();w.u.GetWindowRect(b.tooltip,C.byref(initial))
+                pump_until(lambda:b.tooltip_opening is None)
+                settled=W.RECT();w.u.GetWindowRect(b.tooltip,C.byref(settled))
+                self.assertEqual(initial.top,settled.top)
+                self.assertGreater(settled.left,initial.left)
+                self.assertTrue(w.u.IsWindowVisible(b.tooltip))
                 b.track_hover(False)
                 with patch('interaction_runtime.trace'):
                     w.u.SendMessageW(b.hwnd,0x202,0,0)
@@ -123,6 +134,7 @@ finally:
                     w.u.SendMessageW(b.tooltip,0x202,0,coordinate|(coordinate<<16))
                     opened.assert_called_once_with('isolated-test-thread')
                 self.assertFalse(b.tooltip_active)
+                self.assertIsNone(b.tooltip_opening)
             before=b.geometry;hook_events.clear()
             self.assertTrue(w.u.SetWindowPos(host,None,-19800,-19900,900,1600,0x14))
             pump_until(lambda:b.geometry[:2]==(before[0]+200,before[1]+100))
@@ -142,6 +154,8 @@ finally:
             self.assertEqual(errors,[])
         finally:
             b.closing=True
+            b.stop_tooltip_opening()
+            w.u.DestroyWindow(b.controller)
             if b.location_hook:w.u.UnhookWinEvent(b.location_hook)
             if b.tooltip:w.u.DestroyWindow(b.tooltip)
             if b.hwnd:w.u.DestroyWindow(b.hwnd)

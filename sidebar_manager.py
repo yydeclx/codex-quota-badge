@@ -2,15 +2,13 @@
 import sys
 import subprocess
 import copy
-import queue
-import threading
 import tkinter as tk
 from tkinter import ttk,messagebox,simpledialog
 from pathlib import Path
-from sidebar_data import load_config,save_config,validate_config,ROOT,GAP_MIN,GAP_MAX
+from sidebar_data import load_config,save_config,validate_config,composer_enabled,ROOT,GAP_MIN,GAP_MAX
 from sidebar_styles import STYLES,preview
 import sidebar_startup
-from manager_widgets import RoundButton,RoundPanel,StyleTile,VersionBadge,SlimScrollbar
+from manager_widgets import RoundButton,RoundPanel,StyleTile,VersionBadge,SlimScrollbar,surface
 from quota_styles import QUOTA_STYLES
 from font_fallback import ui_family
 
@@ -39,13 +37,41 @@ class Toggle(tk.Canvas):
         self.var=var;self.s=scale
         super().__init__(parent,width=round(42*scale),height=round(26*scale),bg='white',highlightthickness=0,cursor='hand2',takefocus=True)
         self.bind('<Button-1>',self.flip);self.bind('<space>',self.flip)
-        var.trace_add('write',lambda *_:self.draw());self.draw()
+        trace=var.trace_add('write',lambda *_:self.draw())
+        self.bind('<Destroy>',lambda event:var.trace_remove('write',trace))
+        self.bind('<FocusIn>',lambda event:self.draw());self.bind('<FocusOut>',lambda event:self.draw())
+        self.draw()
     def flip(self,event=None):self.var.set(not self.var.get())
     def draw(self):
         self.delete('all');s=self.s;color='#222827' if self.var.get() else '#dadfdd'
         self.create_line(13*s,13*s,29*s,13*s,width=24*s,capstyle='round',fill=color)
         x=(29 if self.var.get() else 13)*s
         self.create_oval(x-9*s,4*s,x+9*s,22*s,fill='white',outline='')
+        if self.focus_get()==self:
+            self.create_rectangle(1,1,41*s-1,26*s-2,outline='#176e4e',width=max(1,round(s)))
+
+class ComposerStyleTile(StyleTile):
+    def __init__(self,parent,code,name,var,font,scale):
+        self.previews=()
+        super().__init__(parent,code,name,None,var,font,scale)
+        self.configure(width=round(272*scale),height=round(88*scale))
+        self.bind('<Return>',lambda event:var.set(code))
+        self.bind('<FocusIn>',lambda event:self.draw());self.bind('<FocusOut>',lambda event:self.draw())
+
+    def draw(self):
+        w,h=self.winfo_width(),self.winfo_height()
+        if w<3 or h<3:return
+        s=self.s;selected=self.var.get()==self.code;focused=self.focus_get()==self
+        key=(w,h,selected,focused,self.hover,self.previews)
+        if key==getattr(self,'_draw_key',None):return
+        self._draw_key=key;self.delete('all')
+        border='#777773' if selected or focused else '#d4d3d0' if self.hover else '#e7e6e4'
+        self.photo=surface(self,w,h,'#f3f2f0' if selected else '#ffffff',border,10*s)
+        self.create_image(0,0,image=self.photo,anchor='nw')
+        self.create_text(12*s,15*s,text=self.name,font=self.font,fill='#292929',anchor='w')
+        for y,photo in zip((39,67),self.previews):
+            self.create_image(w/2,y*s,image=photo)
+        if selected:self.create_oval(w-15*s,13*s,w-11*s,17*s,fill='#343434',outline='')
 
 class Manager:
     BG='#faf9f8';INK='#292927';MUTED='#83827e'
@@ -63,7 +89,8 @@ class Manager:
         self.preview_timer=None;self.preview_cache={};self.loaded_galleries=set()
         self.current_style=initial_style;self.page_positions={};self.revealed=False
         self.config=load_config();self.rows=[];self.ready=False;self.dirty=False
-        self.switching=False;self.edit_revision=0;self.save_results=queue.Queue()
+        self.composer_display=tk.BooleanVar(value=composer_enabled(self.config))
+        self.edit_revision=0
         st=ttk.Style();st.theme_use('clam')
         st.configure('TButton',font=self.font(14),padding=(self.px(12),self.px(8)),borderwidth=0,relief='flat',background='#eeedea',foreground=self.INK)
         st.map('TButton',background=[('active','#e3e2df')])
@@ -109,16 +136,18 @@ class Manager:
         self.label(summary,'',12,muted=True,textvariable=self.enabled_count).pack(side='left')
         self.label(summary,'顺序 / 详情 / 显示',12,muted=True).pack(side='right',padx=self.px(10))
         self.row_frame=tk.Frame(modules,bg=self.BG);self.row_frame.pack(fill='x');self.build_rows()
+        self.composer_display.trace_add('write',self.changed)
+        self.composer_display.trace_add('write',self.update_enabled_count)
         self.row_frame.bind('<Configure>',lambda event:self.sync_page_height(0))
         actions=tk.Frame(modules,bg=self.BG);actions.pack(fill='x',pady=self.px(8))
         self.button(actions,text='＋ 用量模块',command=self.add).pack(side='left')
         self.button(actions,text='＋ 功能模块',command=self.add_module).pack(side='left',padx=self.px(8))
         self.style=tk.StringVar(value=self.config['style']);self.quota_style=tk.StringVar(value=self.config.get('quotaStyle','01'))
         self.style_cards=[];self.quota_cards=[]
-        self.heading(appearance,'外观','独立设置 Token 与周额度样式，统一调整侧栏位置')
+        self.heading(appearance,'外观','设置 Token、周额度和底栏样式，调整侧栏位置')
         tabs=tk.Frame(appearance,bg=self.BG);tabs.pack(fill='x',pady=(0,self.px(10)))
         self.style_tabs=[];self.style_grids=[]
-        for index,title in enumerate(('Token 样式','周额度样式')):
+        for index,title in enumerate(('Token 样式','周额度样式','底栏样式')):
             button=RoundButton(tabs,title,lambda i=index:self.show_styles(i),self.font(14),self.s,width=112)
             button.pack(side='left',padx=(0,self.px(5)));self.style_tabs.append(button)
         for index,(catalog,var,cards) in enumerate(((STYLES,self.style,self.style_cards),(QUOTA_STYLES,self.quota_style,self.quota_cards))):
@@ -127,7 +156,11 @@ class Manager:
                 tile=StyleTile(grid,code,name,None,var,self.font(12),self.s)
                 tile.grid(row=n//5,column=n%5,sticky='nsew',padx=self.px(3),pady=self.px(3));grid.columnconfigure(n%5,weight=1,uniform='style')
                 cards.append((code,tile))
-        self.style.trace_add('write',lambda *_:self.select_style());self.quota_style.trace_add('write',lambda *_:self.select_style());self.select_style()
+        self.build_composer_gallery(appearance)
+        for var in (self.style,self.quota_style,self.composer_style):
+            var.trace_add('write',lambda *_:self.select_style())
+        self.composer_weight.trace_add('write',self.refresh_composer_previews)
+        self.select_style()
         self.show_styles(initial_style)
         spacing=self.card(appearance)
         self.label(spacing,'位置与间距',15,bold=True).pack(anchor='w',pady=(0,self.px(6)))
@@ -150,7 +183,7 @@ class Manager:
         self.option(activity,'会话状态指示','绿点呼吸：运行中 · 蓝点常亮：完成未读',self.activity_enabled)
         self.divider(activity)
         self.realtime_metrics_enabled=tk.BooleanVar(value=self.config.get('realtimeMetricsEnabled',True))
-        self.option(activity,'实时指标补丁',('开启：实时首字等待与输出速度；关闭：请求结束后统计','切换需重启本地 OpenCodex，可能短暂中断连接'),self.realtime_metrics_enabled)
+        self.option(activity,'实时用量与速度',('自动使用本机 OpenCodex 提供的实时指标','未连接或接口不支持时，显示已有统计'),self.realtime_metrics_enabled)
         self.divider(activity)
         self.compact_mode=tk.BooleanVar(value=self.config.get('compactMode',False))
         self.option(activity,'紧凑模式','运行中、待查看为 0 持续 5 秒后隐藏；有任务时恢复',self.compact_mode)
@@ -172,7 +205,7 @@ class Manager:
         line=self.option(recovery,'侧栏没有显示？','保留当前设置，重新连接客户端窗口',bold=True)
         self.button(line,text='启动 / 恢复侧栏',command=self.start).pack(side='right')
         self.label(settings,'用量统计来自本机 OpenCodex，非账号全设备或公司账单总量',12,muted=True).pack(anchor='w',pady=self.px(10))
-        for var in (self.style,self.quota_style,self.quota_account,self.bottom,self.horizontal,self.gap,self.autostart,self.refresh,self.activity_enabled,self.realtime_metrics_enabled,self.compact_mode,self.alert_enabled,self.alert_threshold):var.trace_add('write',self.changed)
+        for var in (self.style,self.quota_style,self.composer_style,self.composer_weight,self.quota_account,self.bottom,self.horizontal,self.gap,self.autostart,self.refresh,self.activity_enabled,self.realtime_metrics_enabled,self.compact_mode,self.alert_enabled,self.alert_threshold):var.trace_add('write',self.changed)
         self.gap.trace_add('write',self.apply_gap)
         self.ready=True;self.show(initial_page);self.root.protocol('WM_DELETE_WINDOW',self.close)
         set_window_icons(self.root)
@@ -186,9 +219,63 @@ class Manager:
     def reveal(self):
         self.settle_page(self.current_page)
         self.root.attributes('-alpha',1);self.revealed=True
+    def build_composer_gallery(self,appearance):
+        from composer_usage import COMPOSER_STYLES,COMPOSER_WEIGHTS
+        self.composer_style=tk.StringVar(value=self.config.get('composerStyle','classic'))
+        self.composer_weight=tk.StringVar(value=self.config.get('composerWeight','normal'))
+        self.composer_cards=[]
+        self.composer_weight_buttons=[]
+        gallery=tk.Frame(appearance,bg=self.BG);self.style_grids.append(gallery)
+        weight_row=self.card(gallery)
+        self.label(weight_row,'底栏字重',14,bold=True).pack(side='left')
+        choices=tk.Frame(weight_row,bg='white');choices.pack(side='right')
+        for code,title in COMPOSER_WEIGHTS:
+            button=RoundButton(choices,title,lambda value=code:self.composer_weight.set(value),
+                               self.font(14,bold=code=='bold'),self.s,width=92,outlined=True)
+            button.configure(height=self.px(44))
+            button.pack(side='left',padx=(self.px(8),0))
+            button.select(self.composer_weight.get()==code)
+            self.composer_weight_buttons.append((code,button))
+        display=tk.Frame(weight_row,bg='white');display.pack(side='left',expand=True)
+        self.label(display,'显示底栏',14).pack(side='left',padx=(0,self.px(8)))
+        Toggle(display,self.composer_display,self.s).pack(side='left')
+        inline_row=tk.Frame(gallery,bg=self.BG);inline_row.pack(fill='x',pady=(0,self.px(8)))
+        self.button(inline_row,'打开内嵌版 Codex',self.open_inline_codex,width=140).pack(side='right')
+        self.label(inline_row,'首次使用内嵌版时，需退出当前 Codex',12,muted=True,wraplength=self.px(225)).pack(side='left')
+        grid=tk.Frame(gallery,bg=self.BG);grid.pack(fill='x',pady=(0,self.px(8)))
+        for column in range(2):grid.columnconfigure(column,weight=1,uniform='composer')
+        for n,(code,title) in enumerate(COMPOSER_STYLES):
+            tile=ComposerStyleTile(grid,code,title,self.composer_style,self.font(12),self.s)
+            tile.grid(row=n//2,column=n%2,sticky='nsew',padx=self.px(3),pady=self.px(3))
+            self.composer_cards.append((code,tile))
+
+    def refresh_composer_previews(self,*_):
+        for code,button in self.composer_weight_buttons:button.select(self.composer_weight.get()==code)
+        self.loaded_galleries.discard(2)
+        if getattr(self,'current_page',None)==1 and self.current_style==2:
+            self.load_preview(2)
+
+    def load_composer_previews(self):
+        from PIL import ImageTk
+        from composer_usage import render_composer_preview
+        weight=self.composer_weight.get()
+        for code,tile in self.composer_cards:
+            photos=[]
+            for active in (False,True):
+                key=(2,code,self.s,weight,active)
+                if key not in self.preview_cache:
+                    image=render_composer_preview(self.s,code,weight,active=active)
+                    self.preview_cache[key]=ImageTk.PhotoImage(image,master=self.root)
+                photos.append(self.preview_cache[key])
+            tile.previews=tuple(photos);tile.draw()
+
     def load_preview(self,index=None):
         index=self.current_style if index is None else index
         if index in self.loaded_galleries:return
+        if index==2:
+            self.load_composer_previews()
+            self.loaded_galleries.add(index)
+            return
         from PIL import ImageTk
         cards=self.quota_cards if index else self.style_cards
         for code,tile in cards:
@@ -294,14 +381,12 @@ class Manager:
             self.prepare_gallery(index);self.settle_page(1)
         for i,button in enumerate(self.style_tabs):button.select(i==index)
     def select_style(self):
-        for code,frame in self.style_cards+self.quota_cards:frame.draw()
+        for _,frame in self.style_cards+self.quota_cards+self.composer_cards:frame.draw()
     def changed(self,*_):
         if self.ready:
             self.dirty=True;self.edit_revision+=1
-            if not self.switching:self.message.set('有未保存的更改')
+            self.message.set('有未保存的更改')
     def close(self):
-        if self.switching:
-            self.message.set('正在切换补丁并重启 OpenCodex，请等待完成后关闭');return
         if self.dirty:
             answer=messagebox.askyesnocancel('未保存的更改','关闭前保存当前设置？',parent=self.root)
             if answer is None:return
@@ -313,7 +398,8 @@ class Manager:
         group=self.card(self.row_frame)
         for n,item in enumerate(self.config['items']):
             if n:tk.Frame(group,bg='#eeedea',height=1).pack(fill='x')
-            enabled=tk.BooleanVar(value=item.get('enabled',True));gap=tk.IntVar(value=item.get('gapAfter',0));self.rows.append((enabled,gap))
+            enabled=self.composer_display if item['type']=='session_usage' else tk.BooleanVar(value=item.get('enabled',True))
+            gap=tk.IntVar(value=item.get('gapAfter',0));self.rows.append((enabled,gap))
             row=tk.Frame(group,bg='white',height=self.px(46));row.pack(fill='x');row.pack_propagate(False);self.module_rows.append(row)
             Toggle(row,enabled,self.s).pack(side='right',padx=(self.px(8),0))
             detail=tk.Frame(group,bg='white')
@@ -338,7 +424,9 @@ class Manager:
             self.label(detail,'DIP',12,muted=True).pack(side='left',padx=self.px(6))
             if item['id'] not in ('chatgpt_today','skg_today','weekly_quota'):
                 self.button(detail,text='移除',command=lambda i=n:self.remove(i)).pack(side='right')
-            enabled.trace_add('write',self.changed);enabled.trace_add('write',self.update_enabled_count);gap.trace_add('write',self.changed)
+            if enabled is not self.composer_display:
+                enabled.trace_add('write',self.changed);enabled.trace_add('write',self.update_enabled_count)
+            gap.trace_add('write',self.changed)
         self.update_enabled_count()
     def update_enabled_count(self,*_):
         self.enabled_count.set(f'已启用 {sum(enabled.get() for enabled,_ in self.rows)} / {len(self.rows)} 个模块')
@@ -387,25 +475,18 @@ class Manager:
             # value. Validate on save rather than interrupting each keystroke.
             if not trace:messagebox.showerror('输入有误','间距范围为 -10–30')
     def save(self):
-        if self.switching:
-            self.message.set('正在切换补丁并重启 OpenCodex，请等待完成后保存');return False
         try:
             snapshot=copy.deepcopy(self.config)
             if hasattr(self,'quota_account'):snapshot['quotaAccount']=self.quota_account.get()
+            if hasattr(self,'composer_style'):
+                snapshot.update(composerStyle=self.composer_style.get(),composerWeight=self.composer_weight.get())
+            if hasattr(self,'composer_display'):
+                display=self.composer_display.get()
+                if 'composerDisplayEnabled' in snapshot or display!=composer_enabled(snapshot):
+                    snapshot['composerDisplayEnabled']=display
             for item,(enabled,gap) in zip(snapshot['items'],self.rows):item.update(enabled=enabled.get(),gapAfter=gap.get())
             snapshot.update(realtimeMetricsEnabled=self.realtime_metrics_enabled.get(),compactMode=self.compact_mode.get(),quotaAlertEnabled=self.alert_enabled.get(),quotaAlertThreshold=self.alert_threshold.get(),activityEnabled=self.activity_enabled.get(),style=self.style.get(),quotaStyle=self.quota_style.get(),bottomOffset=self.bottom.get(),horizontalOffset=self.horizontal.get(),gap=self.gap.get(),refreshSeconds=self.refresh.get());validate_config(snapshot)
-            previous_mode=load_config().get('realtimeMetricsEnabled',True)
             previous=sidebar_startup.enabled();desired_autostart=self.autostart.get()
-            if snapshot['realtimeMetricsEnabled']!=previous_mode:
-                self.switching=True;self.save_button.disabled=True;self.save_button.draw()
-                self.message.set('正在切换补丁并重启 OpenCodex…')
-                revision=self.edit_revision
-                try:
-                    threading.Thread(target=self.switch_mode_worker,args=(self.save_results,snapshot,desired_autostart,previous,previous_mode,revision),daemon=False).start()
-                except Exception:
-                    self.switching=False;self.save_button.disabled=False;self.save_button.draw();raise
-                self.root.after(100,self.poll_save_result)
-                return False  # Pending: a close handler must keep the window alive.
             sidebar_startup.set_enabled(desired_autostart)
             try:save_config(snapshot)
             except Exception:
@@ -413,34 +494,6 @@ class Manager:
             self.saved(snapshot,self.edit_revision);return True
         except Exception as exc:
             self.message.set('保存失败 · 更改未保存');messagebox.showerror('未保存',str(exc),parent=self.root);return False
-    @staticmethod
-    def switch_mode_worker(results,snapshot,desired_autostart,previous_autostart,previous_mode,revision):
-        # All Tk values are captured by save(); communicate only through the queue.
-        mode_applied=False;startup_attempted=False
-        try:
-            from patch_mode import apply_mode
-            apply_mode(snapshot['realtimeMetricsEnabled']);mode_applied=True
-            startup_attempted=True;sidebar_startup.set_enabled(desired_autostart)
-            save_config(snapshot)
-        except Exception as exc:
-            errors=[str(exc)]
-            if mode_applied:
-                try:apply_mode(previous_mode)
-                except Exception as rollback:errors.append('补丁模式回滚失败：'+str(rollback))
-            if startup_attempted:
-                try:sidebar_startup.set_enabled(previous_autostart)
-                except Exception as rollback:errors.append('自启动回滚失败：'+str(rollback))
-            results.put((snapshot,revision,'\n'.join(errors)))
-        else:results.put((snapshot,revision,None))
-    def poll_save_result(self):
-        try:snapshot,revision,error=self.save_results.get_nowait()
-        except queue.Empty:
-            self.root.after(100,self.poll_save_result);return
-        self.switching=False;self.save_button.disabled=False;self.save_button.draw()
-        if error is not None:
-            self.dirty=True;self.message.set('切换失败 · 更改未保存')
-            messagebox.showerror('未保存',error,parent=self.root)
-        else:self.saved(snapshot,revision)
     def saved(self,snapshot,revision):
         # Edits made while the worker ran remain pending instead of being discarded.
         self.dirty=self.edit_revision!=revision
@@ -451,6 +504,27 @@ class Manager:
     def start(self):
         subprocess.Popen([r'C:\Program Files\PowerShell\7\pwsh.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(ROOT/'start.ps1')],creationflags=subprocess.CREATE_NO_WINDOW)
         self.message.set('已请求启动，已有实例时不会重复创建')
+    def open_inline_codex(self):
+        if not self.composer_display.get() or not composer_enabled(load_config()):
+            self.message.set('请先开启「显示底栏」并保存');return
+        if getattr(self,'inline_launch',None) is not None:return
+        try:
+            self.inline_launch=subprocess.Popen([r'C:\Program Files\PowerShell\7\pwsh.exe','-NoProfile','-File',
+                str(ROOT/'composer-inline-validation'/'start-inline.ps1'),'-WaitForExit'],
+                stdout=subprocess.PIPE,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
+        except OSError:
+            self.message.set('无法启动内嵌版');return
+        self.message.set('正在检查内嵌版…');self.root.after(200,self.poll_inline_launch)
+    def poll_inline_launch(self):
+        proc=self.inline_launch
+        if proc.poll() is None:
+            self.root.after(200,self.poll_inline_launch);return
+        stdout,_=proc.communicate();self.inline_launch=None
+        result=stdout.decode('utf-8',errors='replace').strip().splitlines()
+        state=result[-1] if result else ''
+        labels={'WaitingForExit':'请正常退出 Codex，内嵌版会自动打开','AlreadyInline':'内嵌版已在运行',
+                'StartingInline':'已请求打开内嵌版 Codex'}
+        self.message.set(labels.get(state,'内嵌版未启动 · 请检查 Codex 或插件文件'))
     def run(self):self.root.mainloop()
 
 def run_manager(quota=False):

@@ -1,4 +1,4 @@
-from ui_render import font as ui_font, raster_cache
+from ui_render import font as ui_font, popup_frame, raster_cache
 """Compact interactive native hover cards; coordinates are logical DIP."""
 from PIL import Image,ImageDraw,ImageFont,ImageFilter
 from quota_accounting import quota_breakdown
@@ -47,10 +47,7 @@ def render_panel(scale,title,rows,focus=None,footer='',width=298):
     # two DIP before its pitch. Keep the same six-DIP inset on every side.
     header_height=row_start+12 if topic_cards else 48 if title else 20
     height=header_height+len(rows)*row_height+(18 if footer else 0)
-    im=Image.new('RGBA',(p(width),p(height)));shadow=Image.new('RGBA',im.size)
-    ImageDraw.Draw(shadow).rounded_rectangle((p(7),p(9),p(width-7),p(height-5)),radius=p(10),fill=(0,0,0,25))
-    im.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(p(3))));d=ImageDraw.Draw(im)
-    d.rounded_rectangle((p(7),p(6),p(width-7),p(height-8)),radius=p(10),fill=(252,251,250,255 if topic_cards else 249),outline='#dcdbd9',width=max(1,p(.6)))
+    im=popup_frame(p,width,height,height-8);d=ImageDraw.Draw(im)
     regular=ui_font('C:/Windows/Fonts/msyh.ttc',p(10));small=ui_font('C:/Windows/Fonts/msyh.ttc',p(8));bold=ui_font('C:/Windows/Fonts/msyhbd.ttc',p(11))
     topic_font=ui_font('C:/Windows/Fonts/msyhbd.ttc',p(11)) if topic_cards else regular
     if title:d.text((p(18),p(15)),title,font=bold,fill='#292927')
@@ -139,10 +136,7 @@ def render_quota_chart(scale,remaining,reset,cycle,focus=None,day_key=None,five_
     is_pro = five_hour is None and ((isinstance(plan_type,str) and plan_type.lower().startswith('pro')) or (reset_signal or {}).get('quotaAccountLabel') in ('主账号','副账号'))
     module_offset=68 if reset_signal is not None else 0
     height=251+module_offset
-    im=Image.new('RGBA',(p(width),p(height)));shadow=Image.new('RGBA',im.size)
-    ImageDraw.Draw(shadow).rounded_rectangle((p(7),p(9),p(width-7),p(height-5)),radius=p(10),fill=(0,0,0,25))
-    im.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(p(3))));d=ImageDraw.Draw(im)
-    d.rounded_rectangle((p(7),p(6),p(width-7),p(height-8)),radius=p(10),fill=(252,251,250,249),outline='#dcdbd9',width=max(1,p(.6)))
+    im=popup_frame(p,width,height,height-8);d=ImageDraw.Draw(im)
     fonts=[ui_font('C:/Windows/Fonts/'+f,p(n)) for f,n in [('msyh.ttc',9),('msyhbd.ttc',11),('msyhbd.ttc',16),('msyh.ttc',9.5)]]
     def text(x,y,t,font=0,color='#85847f',anchor='lt'):d.text((p(x),p(y)),t,font=fonts[font],fill=color,anchor=anchor)
     if reset_signal is not None:

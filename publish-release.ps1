@@ -3,15 +3,17 @@ param(
  [Parameter(Mandatory=$true)][string]$Owner,
  [Parameter(Mandatory=$true)][string]$Repository,
  [Parameter(Mandatory=$true)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
- [string]$Notes='', [string]$NotesFile='', [switch]$PrepareOnly, [switch]$IncludeGatewayBundle
+ [string]$Notes='', [string]$NotesFile='', [switch]$PrepareOnly, [string]$OutputDirectory=''
 )
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 if($PSVersionTable.PSVersion.Major -lt 7){throw '发布要求 PowerShell 7'}
 $root=[IO.Path]::GetFullPath($PSScriptRoot)
+$out=if($OutputDirectory){[IO.Path]::GetFullPath($OutputDirectory)}else{$root}
+$null=New-Item -ItemType Directory -Path $out -Force
 $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
 $stage=Join-Path $tempRoot ('codex-quota-release-'+[guid]::NewGuid().ToString('N'))
-$zip=Join-Path $root "codex-quota-badge-$Version.zip"
-$files=@('version.py','quota_badge.py','quota_styles.py','quota_accounting.py','quota_attribution.py','quota_evidence.py','quota_native_evidence.py','patch_mode.py','native_badge.py','sidebar_plugin.py','sidebar_compat.py','window_mode.py','sidebar_activity.py','sidebar_context.py','font_fallback.py','sidebar_data.py','sidebar_details.py','sidebar_manager.py','sidebar_modules.py','sidebar_options.py','sidebar_startup.py','sidebar_styles.py','sidebar_telemetry.py','live_metrics.py','sidebar_transparency.py','sidebar_maintenance.py','sidebar_supervisor.py','reset_signals.py','update_client.py','update_prompt.py','mac_sidebar.py','start-mac.sh','install-mac.sh','update-mac.sh','tooltip_card.py','hover_panel.py','interaction_runtime.py','ui_presence.py','ui_render.py','manager_icons.py','manager_widgets.py','manage.py','start.ps1','manage.ps1','start-polling-backup.ps1','install.ps1','update.ps1','PORTABLE-INSTALL.md','README.md','codex-monochrome.ico','codex-original.ico','gateway-telemetry/deploy_gateway.py','gateway-telemetry/rollback.ps1','gateway-telemetry/local-telemetry-2.92.0.patch','gateway-telemetry/README.md','gateway-telemetry/LICENSE')
+$zip=Join-Path $out "codex-quota-badge-$Version.zip"
+$files=@('version.py','quota_badge.py','quota_styles.py','quota_accounting.py','quota_attribution.py','quota_evidence.py','quota_native_evidence.py','native_badge.py','sidebar_plugin.py','sidebar_compat.py','window_mode.py','sidebar_activity.py','sidebar_context.py','font_fallback.py','sidebar_data.py','sidebar_details.py','sidebar_manager.py','sidebar_modules.py','sidebar_options.py','sidebar_startup.py','sidebar_styles.py','sidebar_telemetry.py','live_metrics.py','session_usage.py','session_usage_card.py','session_usage_view.py','composer_usage.py','composer_anchor.py','composer_font.py','sidebar_transparency.py','sidebar_maintenance.py','sidebar_supervisor.py','reset_signals.py','update_client.py','update_prompt.py','mac_sidebar.py','start-mac.sh','install-mac.sh','update-mac.sh','tooltip_card.py','hover_panel.py','interaction_runtime.py','ui_presence.py','ui_render.py','manager_icons.py','manager_widgets.py','manage.py','start.ps1','manage.ps1','start-polling-backup.ps1','install.ps1','update.ps1','PORTABLE-INSTALL.md','README.md','codex-monochrome.ico','codex-original.ico','composer-inline-validation/start-inline.ps1','composer-inline-validation/launch.py','composer-inline-validation/devtools_pipe.py','composer-inline-validation/usage_bridge.py','composer-inline-validation/legacy-widget.js','composer-inline-validation/codex-host.js')
 $assets=[Collections.Generic.List[string]]::new()
 if($NotesFile){$Notes=Get-Content -LiteralPath $NotesFile -Raw -Encoding utf8}
 function Copy-Program([string]$name,[string]$destinationRoot){
@@ -30,39 +32,28 @@ try {
  $portableSkill=(Get-Content -LiteralPath $skill -Raw -Encoding utf8).Replace('真实运行目录：`D:/AI/Codex/ai-software/codex-quota-badge`','运行目录：用户解压本安装包的目录（包含 manage.py）')
  Set-Content -LiteralPath $skill -Value $portableSkill -Encoding utf8NoBOM
  # Fresh-install defaults; never publish this machine's settings.
- $config=@{version=1;quotaAccount='main';refreshSeconds=60;realtimeMetricsEnabled=$false;activityEnabled=$true;items=@(@{id='chatgpt_today';type='opencodex_today';provider='openai';label='ChatGPT';enabled=$true;gapAfter=3},@{id='weekly_quota';type='weekly_quota';label='周额度';enabled=$true;gapAfter=0});services=@();shortcuts=@()}
+ $config=@{version=1;quotaAccount='main';refreshSeconds=60;realtimeMetricsEnabled=$true;activityEnabled=$true;composerDisplayEnabled=$true;items=@(@{id='chatgpt_today';type='opencodex_today';provider='openai';label='ChatGPT';enabled=$true;gapAfter=3},@{id='weekly_quota';type='weekly_quota';label='周额度';enabled=$true;gapAfter=0});services=@();shortcuts=@()}
  $config|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $stage 'sidebar-config.json') -Encoding utf8NoBOM
  @{version=$Version;programFiles=$files;directories=@('.codex-plugin','skills');preservedFiles=@('sidebar-config.json','window-mode.json','update-config.json','quota-history.json','quota-alert-state.json','connection-history.json','reset-signals.json','status.json','sidebar-status.json','update-status.json')}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $stage 'package-manifest.json') -Encoding utf8NoBOM
- foreach($module in @('test_context_lifetime','test_live_account_quota','test_quota_attribution','test_quota_evidence','test_quota_native_evidence','test_update_client','test_reset_signals','test_quota_windows','test_quota_account_selection','test_quota_account_settings','test_quota_account_history','test_quota_account_runtime','test_quota_accounting','test_two_source_ledger','test_two_source_review','test_two_source_ui','test_sidebar_activity','test_modules','test_provider_indicators','test_sidebar_data','test_power_mode','test_stability','test_maintenance','test_supervisor','test_popup_compat','test_topic_panel','test_quota_recovery','test_window_mode','test_windows_update','test_popup_native','test_diagnostics','test_patch_mode')){
+ foreach($module in @('test_context_lifetime','test_live_account_quota','test_quota_attribution','test_quota_evidence','test_quota_native_evidence','test_update_client','test_reset_signals','test_quota_windows','test_quota_account_selection','test_quota_account_settings','test_quota_account_history','test_quota_account_runtime','test_quota_accounting','test_two_source_ledger','test_two_source_review','test_two_source_ui','test_sidebar_activity','test_modules','test_provider_indicators','test_sidebar_data','test_power_mode','test_stability','test_maintenance','test_supervisor','test_popup_compat','test_topic_panel','test_quota_recovery','test_window_mode','test_windows_update','test_popup_native','test_diagnostics','test_sidebar_settings')){
   & python -m unittest $module -q
   if($LASTEXITCODE -ne 0){throw "专项测试失败：$module"}
  }
  Push-Location $stage
  try {
-  & python -B -I -c 'from pathlib import Path; import sys,json; sys.path.insert(0,str(Path.cwd())); [compile(p.read_text(encoding="utf-8-sig"),str(p),"exec") for p in Path.cwd().rglob("*.py")]; import sidebar_plugin,sidebar_compat,window_mode,sidebar_details,sidebar_manager,mac_sidebar,patch_mode,quota_accounting; assert window_mode.load_mode()=="child"; assert window_mode.child_entry().name=="sidebar_plugin.py"; from sidebar_data import load_config; assert load_config()["realtimeMetricsEnabled"] is False; from version import PLUGIN_VERSION; assert PLUGIN_VERSION==json.loads(Path("package-manifest.json").read_text(encoding="utf-8-sig"))["version"]==json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8-sig"))["version"]'
+  & python -B -I -c 'from pathlib import Path; import sys,json; sys.path.insert(0,str(Path.cwd())); [compile(p.read_text(encoding="utf-8-sig"),str(p),"exec") for p in Path.cwd().rglob("*.py")]; import sidebar_plugin,sidebar_compat,window_mode,sidebar_details,sidebar_manager,mac_sidebar,quota_accounting; assert window_mode.load_mode()=="child"; assert window_mode.child_entry().name=="sidebar_plugin.py"; from sidebar_data import load_config; assert load_config()["realtimeMetricsEnabled"] is True; from sidebar_data import composer_enabled; assert composer_enabled(load_config()); from version import PLUGIN_VERSION; assert PLUGIN_VERSION==json.loads(Path("package-manifest.json").read_text(encoding="utf-8-sig"))["version"]==json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8-sig"))["version"]'
   if($LASTEXITCODE -ne 0){throw '干净安装包依赖或版本检查失败'}
+  & python -B (Join-Path $stage 'composer-inline-validation/launch.py') --help | Out-Null
+  if($LASTEXITCODE -ne 0){throw '安装包内嵌底栏启动器依赖检查失败'}
  } finally {Pop-Location}
  if(Test-Path -LiteralPath $zip){throw "发布包已存在，请先核对：$zip"}
  # ZipFile retains dot directories that Compress-Archive silently omits.
  [IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
  $assets.Add($zip)
- if($IncludeGatewayBundle){
-  $bundle=Join-Path $stage 'optional-gateway'
-  foreach($name in @('gateway-telemetry/build/ocx.exe','gateway-telemetry/rollback-official-2.92.0.exe','gateway-telemetry/LICENSE')){Copy-Program $name $bundle}
-  $smoke=Get-Content -LiteralPath (Join-Path $root 'gateway-telemetry/smoke-result.json') -Raw|ConvertFrom-Json
-  $patchHash=(Get-FileHash -LiteralPath (Join-Path $bundle 'gateway-telemetry/build/ocx.exe') -Algorithm SHA256).Hash.ToLower()
-  $officialHash=(Get-FileHash -LiteralPath (Join-Path $bundle 'gateway-telemetry/rollback-official-2.92.0.exe') -Algorithm SHA256).Hash.ToLower()
-  if(!$smoke.passed -or $smoke.binarySHA256 -ne $patchHash -or $patchHash -ne '91401d409aeff213e760615cd36e40ec93a419e7b1a8b8a7367baea544de2372' -or $officialHash -ne 'c7c87829a2b69720612f08e40048f5b20c8097ad8e02f353f1ef8428ab42a4c9'){throw '网关附件哈希验证失败'}
-  @{passed=$true;binarySHA256=$patchHash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $bundle 'gateway-telemetry/smoke-result.json') -Encoding utf8NoBOM
-  $bundleZip=Join-Path $root "opencodex-telemetry-2.92.0-$Version.zip"
-  if(Test-Path -LiteralPath $bundleZip){throw "补丁包已存在：$bundleZip"}
-  [IO.Compression.ZipFile]::CreateFromDirectory($bundle,$bundleZip,[IO.Compression.CompressionLevel]::Optimal,$false)
-  $assets.Add($bundleZip)
- }
  $records=@($assets|ForEach-Object {@{asset=(Split-Path $_ -Leaf);sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLower();size=(Get-Item -LiteralPath $_).Length}})
- $hashFile=Join-Path $root "SHA256SUMS-$Version.txt"
+ $hashFile=Join-Path $out "SHA256SUMS-$Version.txt"
  @($records|ForEach-Object {$_.sha256+'  '+$_.asset})|Set-Content -LiteralPath $hashFile -Encoding utf8NoBOM
- @{version=$Version;tag="v$Version";asset=(Split-Path $zip -Leaf);sha256=$records[0].sha256;owner=$Owner;repository=$Repository;preparedAt=(Get-Date).ToUniversalTime().ToString('o');notes=$Notes;assets=$records}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $root 'release-manifest.json') -Encoding utf8NoBOM
+ @{version=$Version;tag="v$Version";asset=(Split-Path $zip -Leaf);sha256=$records[0].sha256;owner=$Owner;repository=$Repository;preparedAt=(Get-Date).ToUniversalTime().ToString('o');notes=$Notes;assets=$records}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $out 'release-manifest.json') -Encoding utf8NoBOM
  if(!$PrepareOnly){
   if(!(Get-Command gh -ErrorAction SilentlyContinue)){throw '未找到 gh，安装包已准备但未发布'}
   $notePath=Join-Path $stage 'release-notes.md';Set-Content -LiteralPath $notePath -Value $Notes -Encoding utf8NoBOM

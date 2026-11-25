@@ -9,7 +9,17 @@ import copy
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / 'sidebar-config.json'
+COMPOSER_STYLES = (('classic','中文经典'),('english','英文简洁'),('compact','紧凑中文'),('pill','轻底胶囊'))
+COMPOSER_WEIGHTS = (('normal','常规'),('bold','加重'))
 GAP_MIN,GAP_MAX=-10,30
+
+
+def composer_enabled(config):
+    value=config.get('composerDisplayEnabled')
+    if isinstance(value,bool):return value
+    items=config.get('items')
+    return isinstance(items,list) and any(isinstance(i,dict) and i.get('type')=='session_usage'
+                                          and i.get('enabled',True) is True for i in items)
 
 
 def compact_tokens(value):
@@ -36,7 +46,7 @@ def validate_config(config):
         if not isinstance(item,dict) or not isinstance(item.get('id'),str) or item['id'] in ids:
             raise ValueError('Item ids must be unique strings')
         ids.add(item['id'])
-        if item.get('type') not in ('opencodex_today','weekly_quota','tasks_pending','tasks_running','tasks_done','services','shortcuts'):
+        if item.get('type') not in ('opencodex_today','weekly_quota','tasks_pending','tasks_running','tasks_done','services','shortcuts','session_usage'):
             raise ValueError('Unsupported item type')
         if not isinstance(item.get('label'),str) or not 1 <= len(item['label']) <= 14:
             raise ValueError('Item labels must have 1-14 characters')
@@ -70,11 +80,17 @@ def validate_config(config):
     for key in ('activityEnabled','realtimeMetricsEnabled'):
         config.setdefault(key,True)
         if not isinstance(config[key],bool):raise ValueError('Invalid '+key)
+    if 'composerDisplayEnabled' in config and not isinstance(config['composerDisplayEnabled'],bool):
+        raise ValueError('Invalid composerDisplayEnabled')
     config.setdefault('quotaStyle','01')
     if config['quotaStyle'] not in [f'{i:02}' for i in range(1,18)]:raise ValueError('Unknown quota style')
     config.setdefault('style','10')
     if config['style'] not in [f'{i:02}' for i in range(1,11)]:
         raise ValueError('Unknown style')
+    if config.get('composerWeight')=='original':config['composerWeight']='normal'
+    for key,catalog in (('composerStyle',COMPOSER_STYLES),('composerWeight',COMPOSER_WEIGHTS)):
+        config.setdefault(key,catalog[0][0])
+        if config[key] not in tuple(code for code,_ in catalog):raise ValueError('无效的底栏样式或字重')
     for key,default,low,high in [('gap',0,GAP_MIN,GAP_MAX),('bottomOffset',87,45,180),('horizontalOffset',0,-40,40)]:
         config[key]=int(config.get(key,default))
         if not low<=config[key]<=high: raise ValueError('Invalid '+key)

@@ -85,6 +85,25 @@ class GatewayActivityTests(unittest.TestCase):
                 'supportsLive':True,'generatedAt':100000,'providers':{'SKG':{'active':1}},
                 'requests':[{'provider':'SKG','requestId':'r','startedAt':98000}],**values}
 
+    def test_auto_detects_compatible_gateway_after_missing_and_stock_states(self):
+        now=[100.0]
+        with tempfile.TemporaryDirectory() as empty_home:
+            activity=ProviderActivity(lambda:read_activity(empty_home),lambda:now[0])
+            activity._refresh()
+        self.assertEqual(activity.source,'opencodex-unavailable')
+        self.assertEqual(activity.health(),(None,None))
+        self.assertFalse(activity.details('SKG')['supportsLive'])
+        self.assertEqual(activity.next_poll,105)
+        now[0]=105
+        activity.fetch=lambda:activity_from_logs({'logs':[]})
+        activity._refresh()
+        self.assertFalse(activity.details('SKG')['supportsLive'])
+        now[0]=110
+        activity.fetch=self.sample
+        activity._refresh()
+        self.assertTrue(activity.details('SKG')['supportsLive'])
+        self.assertEqual(activity.next_poll,111)
+
     def test_success_poll_is_one_second_and_failures_back_off_and_reset(self):
         now=[100.0];a=ProviderActivity(lambda:self.sample(),lambda:now[0])
         a._refresh();self.assertEqual(a.next_poll,101)

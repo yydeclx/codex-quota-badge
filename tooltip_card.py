@@ -1,4 +1,4 @@
-from ui_render import font as ui_font, raster_cache
+from ui_render import font as ui_font, popup_frame, raster_cache
 """Own layered hover card, independent of Windows tooltip theme."""
 import ctypes as C
 from ctypes import wintypes as W
@@ -52,31 +52,66 @@ class Blend(C.Structure):
     _fields_=[('op',W.BYTE),('flags',W.BYTE),('alpha',W.BYTE),('format',W.BYTE)]
 
 
-def upload(win, hwnd, image):
-    """Copy premultiplied BGRA to an owned per-pixel-alpha popup."""
-    win.g.CreateDIBSection.argtypes=[W.HDC,C.c_void_p,W.UINT,C.POINTER(C.c_void_p),W.HANDLE,W.DWORD]
-    win.g.CreateDIBSection.restype=W.HBITMAP
-    win.u.UpdateLayeredWindow.argtypes=[W.HWND,W.HDC,C.POINTER(W.POINT),C.POINTER(W.SIZE),W.HDC,C.POINTER(W.POINT),W.DWORD,C.POINTER(Blend),W.DWORD]
-    win.u.UpdateLayeredWindow.restype=W.BOOL
-    width,height=image.size
-    header=Header(C.sizeof(Header),width,-height,1,32,0,0,0,0,0,0)
-    dc=win.g.CreateCompatibleDC(None)
-    bits=C.c_void_p()
-    bitmap=win.g.CreateDIBSection(dc,C.byref(header),0,C.byref(bits),None,0)
-    if not bitmap:
-        win.g.DeleteDC(dc)
-        raise C.WinError(C.get_last_error())
-    old=win.g.SelectObject(dc,bitmap)
-    try:
-        raw=image.convert('RGBa').tobytes('raw','BGRa')
-        C.memmove(bits,raw,len(raw))
-        size,origin,blend=W.SIZE(width,height),W.POINT(0,0),Blend(0,0,255,1)
-        if not win.u.UpdateLayeredWindow(hwnd,None,None,C.byref(size),dc,C.byref(origin),0,C.byref(blend),2):
+class LayeredSurface:
+    """Keep premultiplied pixels in one DIB across opacity and position updates."""
+    def __init__(self, win, image):
+        self.win = win
+        win.g.CreateDIBSection.argtypes = [W.HDC, C.c_void_p, W.UINT, C.POINTER(C.c_void_p), W.HANDLE, W.DWORD]
+        win.g.CreateDIBSection.restype = W.HBITMAP
+        win.u.UpdateLayeredWindow.argtypes = [W.HWND, W.HDC, C.POINTER(W.POINT), C.POINTER(W.SIZE), W.HDC, C.POINTER(W.POINT), W.DWORD, C.POINTER(Blend), W.DWORD]
+        win.u.UpdateLayeredWindow.restype = W.BOOL
+        width, height = image.size
+        raw = image.convert('RGBa').tobytes('raw', 'BGRa')
+        header = Header(C.sizeof(Header), width, -height, 1, 32, 0, 0, 0, 0, 0)
+        self.size = W.SIZE(width, height)
+        self.dc = win.g.CreateCompatibleDC(None)
+        if not self.dc:
             raise C.WinError(C.get_last_error())
+        bits = C.c_void_p()
+        self.bitmap = win.g.CreateDIBSection(self.dc, C.byref(header), 0, C.byref(bits), None, 0)
+        if not self.bitmap:
+            self.close()
+            raise C.WinError(C.get_last_error())
+        self.old = win.g.SelectObject(self.dc, self.bitmap)
+        self.bits = bits.value
+        C.memmove(bits, raw, len(raw))
+
+    def update_region(self, image, x, y):
+        """Replace a small patch in the retained premultiplied bitmap."""
+        width, height = image.size
+        if not self.dc or not (0 <= x <= self.size.cx - width and 0 <= y <= self.size.cy - height):
+            raise ValueError('Layered bitmap patch is out of bounds')
+        raw = image.convert('RGBa').tobytes('raw', 'BGRa')
+        step = width * 4
+        for row in range(height):
+            dest = self.bits + ((y + row) * self.size.cx + x) * 4
+            start = row * step
+            C.memmove(dest, raw[start:start+step], step)
+
+    def present(self, hwnd, alpha=255, position=None):
+        origin, blend = W.POINT(0, 0), Blend(0, 0, alpha, 1)
+        point = C.byref(W.POINT(*position)) if position is not None else None
+        if not self.win.u.UpdateLayeredWindow(hwnd, None, point, C.byref(self.size), self.dc,
+                                               C.byref(origin), 0, C.byref(blend), 2):
+            raise C.WinError(C.get_last_error())
+
+    def close(self):
+        if self.dc:
+            if self.bitmap:
+                self.win.g.SelectObject(self.dc, self.old)
+                self.win.g.DeleteObject(self.bitmap)
+            self.win.g.DeleteDC(self.dc)
+            self.dc = None
+
+
+def upload(win, hwnd, image):
+    """Present a single frame for tooltips that do not animate."""
+    surface = LayeredSurface(win, image)
+    try:
+        surface.present(hwnd)
     finally:
-        win.g.SelectObject(dc,old)
-        win.g.DeleteObject(bitmap)
-        win.g.DeleteDC(dc)
+        surface.close()
+
 
 def compact_period_tokens(value):
     from decimal import Decimal, ROUND_HALF_UP
@@ -132,16 +167,13 @@ def render_usage_card(scale,title,today,month,notes=(),week=None,trend=None,rece
     recent_top=detail_end+7
     if recent:detail_end+=21
     bottom=detail_end+len(wrapped)*17+9
-    image=Image.new('RGBA',(p(width),p(bottom+9)));shadow=Image.new('RGBA',image.size)
-    ImageDraw.Draw(shadow).rounded_rectangle((p(7),p(9),p(width-7),p(bottom+2)),radius=p(10),fill=(0,0,0,23))
-    image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(p(3))))
-    d=ImageDraw.Draw(image);d.rounded_rectangle((p(7),p(6),p(width-7),p(bottom)),radius=p(10),fill=(252,251,250,249),outline=(220,219,217,245),width=max(1,p(.65)))
+    image=popup_frame(p,width,bottom+9,bottom);d=ImageDraw.Draw(image)
     def text(x,y,value,font=regular,color=muted,anchor='lt'):d.text((p(x),p(y)),value,font=font,fill=color,anchor=anchor)
     title_width=probe.textlength(title,font=bold)/ss
     cursor=18
     if status_running:
         alpha=max(.60,min(1.0,float(status_level)))
-        bg=(252,251,250);fg=(76,157,114)
+        bg=(255,255,255);fg=(76,157,114)
         color=tuple(round(base+(target-base)*alpha) for base,target in zip(bg,fg))
         d.ellipse((p(cursor),p(18),p(cursor+4),p(22)),fill=color)
         cursor+=8

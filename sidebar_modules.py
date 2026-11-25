@@ -17,7 +17,8 @@ from quota_accounting import reconcile_cycle,apply_credit,add_points,date_at,num
 
 MODULES={'tasks_pending':('待处理','等待确认或补充信息'), 'tasks_running':('运行中','本机会话的当前回合'),
          'tasks_done':('待查看','已完成且 Codex 标记为未读'), 'services':('本地服务','检查配置的本机端口'),
-         'shortcuts':('快捷入口','常用工具和项目目录')}
+         'shortcuts':('快捷入口','常用工具和项目目录'),
+         'session_usage':('会话用量','在 Codex 输入框底部显示生成速度、上下文与缓存')}
 
 def provider_indicators(provider,snapshot,live_requests=(),active=False,now=None):
     """Completion and running are independent; only the Codex unread state clears blue."""

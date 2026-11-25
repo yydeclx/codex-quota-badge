@@ -19,7 +19,7 @@
       "label": "周额度"
     }
   ],
-  "realtimeMetricsEnabled": false,
+  "realtimeMetricsEnabled": true,
   "version": 1,
   "activityEnabled": true
 }

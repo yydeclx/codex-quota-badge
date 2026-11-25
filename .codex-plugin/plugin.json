@@ -1,15 +1,15 @@
 {
   "name": "codex-quota-badge",
-  "version": "1.5.9",
+  "version": "2.0.0",
   "description": "可配置的原生侧栏伴随工具：今日 ChatGPT/SKG Token 与周额度",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "Codex 侧栏指标",
-    "shortDescription": "管理侧栏 Token、周额度、展示开关和顺序",
-    "longDescription": "独立 Windows 子窗口伴随程序，读取 OpenCodex 本机用量；附带管理技能，不修改 Codex 安装包",
+    "displayName": "Codex 侧栏与内嵌底栏",
+    "shortDescription": "管理侧栏、输入框底栏、Token 和周额度",
+    "longDescription": "本地 Codex 用量伴随工具，提供侧栏和可选的输入框内嵌底栏，支持会话速度、上下文、缓存和周额度显示",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [],

@@ -189,6 +189,12 @@ class Telemetry:
         except OSError:
             with self.lock:self.records_at=0
             return False
+    def session_samples(self,session):
+        from live_metrics import conversation_matches
+        with self.lock:
+            rows=tuple(row for group in self.rows.values() for row in group)
+        return [row for row in rows if conversation_matches(row.get('conversationId'),session)]
+
     def view(self,provider):
         with self.lock:
             # Completed records are historical facts, not live samples. Sleeping

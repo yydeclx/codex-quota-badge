@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-import threading
 import tkinter as tk
 from tkinter import ttk
 import types
@@ -151,40 +150,40 @@ class QuotaAccountManagerTests(unittest.TestCase):
         self.notify.assert_not_called()
         self.error.assert_called_once()
 
-    def test_async_save_captures_selection_and_keeps_later_edit_dirty(self):
+    def test_saves_account_and_realtime_setting_together(self):
         manager=self.manager()
         self.choose(manager, '副账号')
         manager.realtime_metrics_enabled.set(False)
-        entered=threading.Event();release=threading.Event()
-
-        def apply_mode(enabled):
-            entered.set()
-            if not release.wait(5):
-                raise RuntimeError('Test worker timed out')
-
-        self.mode.side_effect=apply_mode
-        try:
-            self.assertFalse(manager.save())
-            self.assertTrue(entered.wait(2))
-            self.assertTrue(manager.switching)
-            self.choose(manager, '主账号')
-        finally:
-            release.set()
-        result=manager.save_results.get(timeout=3)
-        self.assertIsNone(result[2])
-        manager.save_results.put(result)
-        manager.poll_save_result()
-        self.assertEqual(load_config()['quotaAccount'], 'secondary')
-        self.assertEqual(manager.quota_account.get(), 'main')
-        self.assertTrue(manager.dirty)
-        self.assertFalse(manager.switching)
-        self.assertIn('仍有未保存', manager.message.get())
-        # The next normal save commits the newer UI edit through the same path.
         self.assertTrue(manager.save())
-        self.assertEqual(load_config()['quotaAccount'], 'main')
+        config=load_config()
+        self.assertEqual(config['quotaAccount'], 'secondary')
+        self.assertFalse(config['realtimeMetricsEnabled'])
         self.assertFalse(manager.dirty)
-        self.mode.assert_called_once_with(False)
+        self.mode.assert_not_called()
         self.error.assert_not_called()
+
+    def test_composer_toggle_saves_and_tracks_legacy_module(self):
+        from sidebar_manager import Toggle
+        data=sample_config()
+        data['items'].append(dict(id='session_usage',type='session_usage',label='会话用量',enabled=True))
+        self.path.write_text(json.dumps(data),encoding='utf-8')
+        manager=self.manager()
+        gallery=manager.style_grids[2]
+        control=next(w for w in self.widgets(gallery) if isinstance(w,Toggle))
+        self.assertIs(manager.rows[1][0],control.var)
+        self.assertTrue(control.var.get())
+        control.flip()
+        self.assertTrue(manager.dirty)
+        self.assertTrue(manager.save())
+        state=load_config()
+        self.assertFalse(state['composerDisplayEnabled'])
+        self.assertFalse(state['items'][1]['enabled'])
+        self.assertTrue(state['items'][0]['enabled'])
+        manager.build_rows()
+        control.flip()
+        self.assertTrue(manager.save())
+        self.assertTrue(load_config()['composerDisplayEnabled'])
+        self.assertTrue(load_config()['items'][1]['enabled'])
 
 
 if __name__=='__main__':

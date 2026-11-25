@@ -3,7 +3,19 @@ from functools import lru_cache,wraps
 from collections import OrderedDict
 from pathlib import Path
 import json,os
-from PIL import ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+
+def popup_frame(p, width, height, bottom, *, dark=False):
+    """Shared chrome for the composer and sidebar popups; leave content and hit areas in place."""
+    image = Image.new('RGBA', (p(width), p(height)))
+    shadow = Image.new('RGBA', image.size)
+    ImageDraw.Draw(shadow).rounded_rectangle((p(8), p(10), p(width - 8), p(bottom + 2)),
+                                             p(12), fill=(0, 0, 0, 88 if dark else 39))
+    image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(p(4))))
+    ImageDraw.Draw(image).rounded_rectangle((p(7), p(6), p(width - 7), p(bottom)), p(12),
+        fill='#20242b' if dark else '#ffffff', outline='#404751' if dark else '#e3e6eb', width=max(1, p(.6)))
+    return image
 
 def _font_candidates(path):
     name=Path(path).name.lower()
